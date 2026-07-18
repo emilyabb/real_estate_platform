@@ -5,37 +5,8 @@ from datetime import datetime
 from delta.tables import DeltaTable
 from typing import List
 from pyspark.sql import DataFrame, SparkSession
-
-
-def _clean_column_names_bronze(df: DataFrame):
-    """
-    Minimal cleaning for bronze layer:
-    - Trim whitespace
-    - Replace spaces with underscores
-    - Remove characters not supported in Databricks column names
-    - Preserve original casing as much as possible
-    """
-    cleaned_cols = []
-    
-    for c in df.columns:
-        new_col = c.strip()
-
-        # Replace percentage suffix
-        new_col = re.sub(r"\s*\(%\)$", "_PERC", new_col)
-
-        new_col = new_col.replace(" ", "_")
-        
-        # Remove problematic characters (keep letters, numbers, underscore)
-        new_col = re.sub(r"[^\w]", "", new_col)
-        
-        # Replace any double underscores
-        new_col = new_col.replace("__", "_")
-
-        cleaned_cols.append(new_col)
-    
-    #print(cleaned_cols)
-    return df.toDF(*cleaned_cols)
-
+from dataclasses import dataclass, field
+import src.bronze.transforms
 
 def _clean_column_names_silver(df):
     """
@@ -72,75 +43,19 @@ def _clean_column_names_silver(df):
     return df.toDF(*cleaned_cols)
 
 
-def _clean_bronze_df(df: DataFrame) -> DataFrame:
-
-    # Clean column names
-    df = _clean_column_names_bronze(df)
-
-    # Find all void columns
-    void_columns = [field.name for field in df.schema.fields if str(field.dataType) == 'NullType()']
-    if len(void_columns) > 0:
-        print(f"Found {len(void_columns)} void type columns: {void_columns}")
-
-    # Cast void type columns to string type
-    for col_name in void_columns:
-        df = df.withColumn(col_name, col(col_name).cast("string"))
-
-    # Find and alert for duplicate column names
-    columns = [c.strip() for c in df.columns]
-    dups = [k for k, v in Counter(columns).items() if v > 1]
-    if len(dups) > 1:
-        print("Warning: Duplicate Columns: ", dups)
-
-    return df
-
-def prep_bronze_file_df(df: DataFrame) -> DataFrame:
-
-    # Clean column names, cast void types to string, and check for duplicate column names
-    df_cleaned = _clean_bronze_df(df)
-
-    # Add metadata
-    df_with_metadata = df_cleaned.select(
-        "*", 
-        "_metadata.file_name", 
-        "_metadata.file_path", 
-        "_metadata.file_modification_time"
-    )
-
-    # Add ingesttime
-    df_with_metadata = df_with_metadata.withColumn("ingest_time", lit(datetime.now()))
-
-    return df_with_metadata
-
-def prep_bronze_api_df(df: DataFrame):
-
-    # Check that the appropriate columns are in the dataframe
-    #for col_name in ["source", "api_endpoint", "api_params"]:
-    for col_name in ["url"]:
-        if col_name not in df.columns:
-            raise ValueError(f"Column {col_name} not found in API-sourced dataframe")
-    
-    df = _clean_bronze_df(df)
-    # Add ingesttime
-    df = df.withColumn("ingest_time", lit(datetime.now()))
-    return df
-
 def prep_silver_df(df):
 
     return _clean_column_names_silver(df)
 
-
-
-def bronze_read_prep_upsert(
+def read_bronze_dataset(
     file_path:str,
     file_format:str,
     table_name:str,
     natural_key:list,
     spark:SparkSession,
     options:dict = {}
-) -> None:
-    """Read, prep, and upsert a bronze table from a file source."""
-
+) -> DataFrame:
+    
     reader = (
         spark.read
         .format(file_format)
@@ -153,9 +68,32 @@ def bronze_read_prep_upsert(
         reader = reader.option(key, value)
 
     df = reader.load(file_path)
+    return df
+
+def bronze_read_prep_upsert(
+    file_path:str,
+    file_format:str,
+    table_name:str,
+    natural_key:list,
+    spark:SparkSession,
+    options: dict[str, str] = field(default_factory=lambda: {
+        "header": "true",
+        "inferSchema": "false",
+    })
+) -> None:
+    """Read, prep, and upsert a bronze table from a file source."""
+    
+    df = read_bronze_dataset(
+        file_path,
+        file_format,
+        table_name,
+        natural_key,
+        spark,
+        options
+    )
 
     # Prep and upsert data
-    df_prepped = prep_bronze_file_df(df)
+    df_prepped = src.bronze.transforms.prep_bronze_file_df(df)
 
     record_count = df_prepped.count()
     print(f"Loading {record_count:,} records into {table_name}")
