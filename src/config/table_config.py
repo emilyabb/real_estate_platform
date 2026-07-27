@@ -2,14 +2,16 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class TableConfig:
-    name: str
+    table_name: str
     source_path: str
     natural_key: list[str]
+    remote_path:str = "" # Only applies to tables that get downloaded to a local path as part of ingestion
     file_format: str = "csv"
     read_options: dict[str, str] = field(default_factory=lambda: {
         "header": "true",
         "inferSchema": "false",
     })
+    read_type="direct" # Direct for reading from an S3 bucket etc., "dbutils.fs.cp" if that is needed
 
     # Potential silver stuff
     # skip_columns: set[str] = field(default_factory=set)
