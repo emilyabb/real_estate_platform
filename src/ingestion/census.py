@@ -1,12 +1,12 @@
 from pyspark.sql.functions import lit
 from pyspark.sql import DataFrame
 import requests
-import sys
-sys.path.append("/Workspace/Repos/dev/real_estate_platform")
 from src.ingestion.api import add_api_metadata
 
-
 def fetch_zcta_population() -> DataFrame:
+    """
+    Download the ZCTA-level population data from the CEnsus
+    """
     API_KEY = dbutils.secrets.get(scope="api-secrets", key="census-api-key" ).lstrip("\x00")
 
     url = "https://api.census.gov/data/2023/acs/acs5"

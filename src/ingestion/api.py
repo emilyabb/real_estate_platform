@@ -3,7 +3,7 @@ from pyspark.sql import DataFrame
 import uuid
 
 def add_api_metadata(df: DataFrame, source:str, endpoint:str, params:dict):
-
+    """ Add metadata columns to a dataframe pull from an API source"""
     return (
         df
         .withColumn("source", lit(source))

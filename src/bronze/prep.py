@@ -9,9 +9,9 @@ from datetime import datetime
 # -------------------------------------------------------------------
 # Bronze column cleaning
 # -------------------------------------------------------------------
-def _clean_column_names_bronze(df: DataFrame):
+def clean_column_names_bronze(df: DataFrame):
     """
-    Minimal cleaning for bronze layer:
+    Minimal cleaning for bronze layer column names:
     - Trim whitespace
     - Replace spaces with underscores
     - Remove characters not supported in Databricks column names
@@ -42,6 +42,9 @@ def _clean_column_names_bronze(df: DataFrame):
 # Bronze dataframe cleaning
 # -------------------------------------------------------------------
 def cast_void_columns(df: DataFrame) -> DataFrame:
+    """
+    Find columns of NullType and cast to string type.
+    """
 
     # Find all void columns
     void_columns = [field.name for field in df.schema.fields if str(field.dataType) == 'NullType()']
@@ -81,20 +84,16 @@ def rename_duplicate_columns(df: DataFrame) -> DataFrame:
 
     return df.toDF(*new_column_names)
 
+import uuid
 
-# def clean_bronze_df(df: DataFrame) -> DataFrame:
-
-#     df = _clean_column_names_bronze(df) # Clean column names
-#     df = cast_void_columns(df)          # Cast void type columns (causes exception) to string
-#     df = rename_duplicate_columns(df)   # Find and alert for duplicate column names
-
-#     return df
 
 # -------------------------------------------------------------------
 # Bronze dataframe metadata
 # -------------------------------------------------------------------
 def add_bronze_metadata(df: DataFrame, source_type:str):
-
+    """ 
+    Add bronze metadata to dataframe
+    """
     if source_type == 'file':
         df = df.select(
             "*", 
@@ -104,9 +103,12 @@ def add_bronze_metadata(df: DataFrame, source_type:str):
         )
     elif source_type == 'api':
         column_names = df.columns # Compute schema once before the loop
-        for col_name in ["url"]:
-            if col_name not in column_names:
-                raise ValueError(f"Column {col_name} not found in API-sourced dataframe")
+        for api_col_name in ["source","api_endpoint","api_params"]:
+            if api_col_name not in column_names:
+                raise ValueError(f"Column {api_col_name} not found in API-sourced dataframe")
+
+        if "ingestion_id" not in column_names:
+            df = df.withColumn("ingestion_id", lit(uuid.uuid4())) # Add ingestion ID
     else:
         raise ValueError(f"Invalid source type: {source_type}")
     
@@ -115,12 +117,15 @@ def add_bronze_metadata(df: DataFrame, source_type:str):
     return df
 
 # -------------------------------------------------------------------
-# Bronze dataframe main public function
+# Bronze dataframe main function
 # -------------------------------------------------------------------
 def prep_bronze_file_df(df: DataFrame, source_type:str) -> DataFrame:
+    """ 
+    Main function for bronze layer dataframe preparation
+    """
 
     # Clean column names, cast void types to string, and check for duplicate column names
-    df = _clean_column_names_bronze(df) # Clean column names
+    df = clean_column_names_bronze(df) # Clean column names
     df = cast_void_columns(df)          # Cast void type columns (causes exception) to string
     df = rename_duplicate_columns(df)   # Find and alert for duplicate column names; rename dupes
 

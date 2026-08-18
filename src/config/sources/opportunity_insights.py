@@ -1,6 +1,3 @@
-import sys
-sys.path.append("/Workspace/Repos/dev/real_estate_platform")
-
 from src.config.table_config import TableConfig
 
 volume_path = "/Volumes/bronze_dev/opportunity_insights/opportunity_insights_raw"
@@ -16,9 +13,9 @@ natural_key = ["zip"]
 TABLES = {
     table_name: TableConfig(
         table_name=table_name,
-        source_path=file_path_csv,
+        local_path=file_path_csv,
         remote_path=url,
         natural_key=natural_key,
-        # read_type="dbutils.fs.cp"
+        source_type="file"
     )
 }
