@@ -82,6 +82,68 @@ def bronze_opportunity_insights_social_capital_zip():
 
 
 # ==========================
+# HUD REFERENCE DATA (States & Counties)
+# ==========================
+
+@dlt.table(
+    name="bronze_dev.hud.states",
+    comment="Bronze layer: HUD state reference data",
+    table_properties={
+        "quality": "bronze",
+        "pipelines.autoOptimize.zOrderCols": "state_code"
+    }
+)
+def bronze_hud_states():
+    """Load HUD state reference data from volume."""
+    return (
+        spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("multiLine", "true")
+        .option("cloudFiles.schemaLocation", f"{SCHEMA_LOCATION_BASE}/hud_states")
+        .load("/Volumes/bronze_dev/hud/hud_raw/reference_data/states_*.json")
+        .select(F.explode("data").alias("state_data"))
+        .select(
+            F.col("state_data.state_code").alias("state_code"),
+            F.col("state_data.state_name").alias("state_name"),
+            F.current_timestamp().alias("_ingest_timestamp")
+        )
+    )
+
+
+@dlt.table(
+    name="bronze_dev.hud.counties",
+    comment="Bronze layer: HUD county reference data",
+    table_properties={
+        "quality": "bronze",
+        "pipelines.autoOptimize.zOrderCols": "fips_code,state_code"
+    }
+)
+def bronze_hud_counties():
+    """Load HUD county reference data from volume."""
+    return (
+        spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("multiLine", "true")
+        .option("cloudFiles.schemaLocation", f"{SCHEMA_LOCATION_BASE}/hud_counties")
+        .load("/Volumes/bronze_dev/hud/hud_raw/reference_data/counties_*.json")
+        .select(F.explode("data").alias("county"))
+        .select(
+            F.col("county.fips_code").alias("fips_code"),
+            F.col("county.state_code").alias("state_code"),
+            F.col("county.county_name").alias("county_name"),
+            F.col("county.cntyname").alias("cntyname"),
+            F.col("county.category").alias("category"),
+            F.col("county.town_name").alias("town_name"),
+            F.current_timestamp().alias("_ingest_timestamp")
+        )
+    )
+
+
+# ==========================
 # CENSUS AMERICAN COMMUNITY SURVEY
 # ==========================
 cb_acs_bronze_key = ",".join(CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["bronze_key"])

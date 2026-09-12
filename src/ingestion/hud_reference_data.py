@@ -1,7 +1,26 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # DBTITLE 1,Setup
 # MAGIC %load_ext autoreload
 # MAGIC %autoreload 2
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # HUD Reference Data Ingestion
+# MAGIC
+# MAGIC **Purpose:** One-time/infrequent ingestion of reference data (states and counties)
+# MAGIC
+# MAGIC **Run Frequency:** Quarterly or annually (reference data changes rarely)
+# MAGIC
+# MAGIC **Output Files:**
+# MAGIC * `/Volumes/bronze_dev/hud/hud_raw/reference_data/states_reference_YYYYMMDD_HHMMSS.json`
+# MAGIC * `/Volumes/bronze_dev/hud/hud_raw/reference_data/counties_reference_YYYYMMDD_HHMMSS.json`
+# MAGIC
+# MAGIC **Note:** These raw JSON files are used by FMR ingestion and will be processed by the DLT pipeline
 
 # COMMAND ----------
 
@@ -29,6 +48,18 @@ print(url)
 states = hud_common.retrieve_hud_json(url, token)
 states_df = spark.createDataFrame(states["data"])
 display(states_df)
+
+# COMMAND ----------
+
+# DBTITLE 1,Save states to volume
+# Save states reference data to reference_data directory
+filename = hud_common.generate_timestamped_filename("states_reference")
+volume_path = hud_common.save_to_volume(
+    states, 
+    filename, 
+    volume_path="/Volumes/bronze_dev/hud/hud_raw/reference_data"
+)
+print(f"Saved states reference data to: {volume_path}")
 
 # COMMAND ----------
 
@@ -64,6 +95,8 @@ print(f"Total batches fetched: {len(counties)}")
 
 # MAGIC %md
 # MAGIC ## Save Raw JSON to Volume
+# MAGIC
+# MAGIC Save both states and counties as timestamped JSON files for pipeline ingestion.
 
 # COMMAND ----------
 
@@ -76,33 +109,3 @@ volume_path = hud_common.save_to_volume(
     volume_path="/Volumes/bronze_dev/hud/hud_raw/reference_data"
 )
 print(f"Saved reference data to: {volume_path}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Create DataFrame for Bronze Table
-
-# COMMAND ----------
-
-# DBTITLE 1,Create counties DataFrame
-# Flatten counties data into list of dictionaries
-list_of_dicts = []
-
-for batch_dict in counties:
-    for data_point in batch_dict["data"]:
-        list_of_dicts.append(data_point)
-
-counties_df = spark.createDataFrame(list_of_dicts)
-print(f"Total counties: {counties_df.count()}")
-display(counties_df)
-
-# COMMAND ----------
-
-# DBTITLE 1,Write to bronze table
-# Write to bronze table for reference by FMR pipeline
-counties_df.write.mode("overwrite").saveAsTable("bronze_dev.hud.counties_reference")
-print("Saved to bronze_dev.hud.counties_reference")
-
-# COMMAND ----------
-
-
