@@ -17,9 +17,9 @@ GRAINS = {
 }
 
 DEFAULT_KEY = (
-    "PERIOD_BEGIN",
-    "PERIOD_END",
-    "REGION_NAME",
+    "PERIOD BEGIN",
+    "PERIOD END",
+    "REGION NAME",
 )
 
 
@@ -35,7 +35,7 @@ REDFIN_TABLES = [
         # ),
         # "schema_name": "redfin",
         "natural_key": DEFAULT_KEY,
-        "bronze_key": [*DEFAULT_KEY, "LAST_UPDATE"],
+        "bronze_key": [*DEFAULT_KEY, "LAST UPDATED"],
         "redfin_dir": d,
         "redfin_grain": g
     }

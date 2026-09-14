@@ -1,6 +1,6 @@
 import dlt
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StringType, ArrayType
 
 from src.utils.sources_ref import REDFIN_TABLES, REDFIN_VOLUME_BASE, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG, CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG
 
@@ -17,9 +17,9 @@ SCHEMA_LOCATION_BASE = "/Volumes/bronze_dev/real_estate/_schemas"
 # #todo Add LAST_UPDATED to redfin keys for bronze. However with silver use LAST_UPDATED as a tiebreaker
 # Deduping happens in silver layer -- however bronze layer should be idempotent
 
-# ==========================
+# ==========================================================
 # REDFIN
-# ==========================
+# ==========================================================
 def create_bronze_redfin_table(table_name, bronze_key):
     
     @dlt.table(
@@ -50,9 +50,9 @@ for redfin_table in REDFIN_TABLES:
     create_bronze_redfin_table(redfin_table["table_name"], redfin_table["bronze_key"])
 
 
-# ==========================
+# ==========================================================
 # OPPORTUNITY INSIGHTS
-# ==========================
+# ==========================================================
 
 opp_insights_sc_bronze_key = ",".join(OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG["bronze_key"])
 opp_insights_sc_table_name = OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG["bronze_table_name"]
@@ -81,9 +81,9 @@ def bronze_opportunity_insights_social_capital_zip():
     )
 
 
-# ==========================
+# ==========================================================
 # HUD REFERENCE DATA (States & Counties)
-# ==========================
+# ==========================================================
 
 @dlt.table(
     name="bronze_dev.hud.states",
@@ -123,7 +123,7 @@ def bronze_hud_states():
 def bronze_hud_counties():
     """Load HUD county reference data from volume."""
     return (
-        spark.readStream
+        spark.readStream 
         .format("cloudFiles")
         .option("cloudFiles.format", "json")
         .option("cloudFiles.inferColumnTypes", "true")
@@ -143,9 +143,9 @@ def bronze_hud_counties():
     )
 
 
-# ==========================
+# ==========================================================
 # CENSUS AMERICAN COMMUNITY SURVEY
-# ==========================
+# ==========================================================
 cb_acs_bronze_key = ",".join(CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["bronze_key"])
 cb_acs_table_name = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["bronze_table_name"]
 @dlt.table(
@@ -164,12 +164,32 @@ def bronze_census_bureau_american_community_survey():
     return (
         spark.readStream
         .format("cloudFiles")
-        .option("cloudFiles.format", "json")
-        .option("cloudFiles.inferColumnTypes", "true")
+        .option("cloudFiles.format", "text")
+        .option("wholeText", "true")
         .option("cloudFiles.schemaLocation",  f"{SCHEMA_LOCATION_BASE}/{table_name}")
         .load(cb_acs_directory) # All files in directory
-        .withColumn("_ingest_timestamp", F.current_timestamp())
-        .withColumn("_source_file", F.col("_metadata.file_path"))
+        # Parse the list-of-lists JSON: [[headers...], [row1...], [row2...], ...]
+        .withColumn("parsed", F.from_json(
+            "value",
+            ArrayType(ArrayType(StringType()))
+        ))
+        .withColumn("row", F.explode("parsed"))
+        # Skip the header row (first element of each file is column names)
+        .filter(F.element_at("row", 1) != "NAME")
+        .select(
+            F.element_at("row", 1).alias("NAME"),
+            F.element_at("row", 2).alias("B01003_001E"),
+            F.element_at("row", 3).alias("B01002_001E"),
+            F.element_at("row", 4).alias("B19013_001E"),
+            F.element_at("row", 5).alias("B17001_002E"),
+            F.element_at("row", 6).alias("B02001_002E"),
+            F.element_at("row", 7).alias("B02001_003E"),
+            F.element_at("row", 8).alias("B02001_005E"),
+            F.element_at("row", 9).alias("B03003_003E"),
+            F.element_at("row", 10).alias("zip"),
+            F.current_timestamp().alias("_ingest_timestamp"),
+            F.col("_metadata.file_path").alias("_source_file"),
+        )
     )
 
 

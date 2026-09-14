@@ -5,16 +5,11 @@ from datetime import datetime
 from delta.tables import DeltaTable
 from typing import List
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 from dataclasses import dataclass, field
-
-
 import time
 from typing import List, Callable, Any, Dict
-from pyspark.sql import DataFrame
-
 from pyspark.sql.functions import col, lit
-from collections import Counter
-from datetime import datetime
 
 # -------------------------------------------------------------------
 # Bronze column cleaning
@@ -145,36 +140,87 @@ def prep_bronze_df(df: DataFrame, source_type:str) -> DataFrame:
 
 
 
-
-def bronze_read_prep_upsert(
-    file_path:str,
-    file_format:str,
-    table_name:str,
-    natural_key:list,
-    spark:SparkSession,
-    options: dict[str, str] = field(default_factory=lambda: {
-        "header": "true",
-        "inferSchema": "false",
-    })
-) -> None:
-    """Read, prep, and upsert a bronze table from a file source."""
+def clean_columns_silver(df):
+    """
+    Standardized cleaning for silver layer:
+    - Lowercase
+    - Convert to snake_case
+    - Remove punctuation
+    - Collapse multiple underscores
+    """
+    cleaned_cols = []
     
-    df = read_bronze_dataset(
-        file_path,
-        file_format,
-        table_name,
-        natural_key,
-        spark,
-        options
-    )
+    def standardize_column_names_silver(col_name: str) -> str:
+        # Step 1: insert underscore before capital letters (camelCase / PascalCase)
+        col_name = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', col_name)
+        
+        # Step 2: split acronym boundaries (e.g., FIPSCode → FIPS_Code)
+        col_name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', col_name)
+        
+        # Step 3: split letters and numbers (FIPS23 → FIPS_23)
+        col_name = re.sub(r'([a-zA-Z])(\d)', r'\1_\2', col_name)
+        
+        # Step 4: normalize
+        col_name = col_name.lower()
+        col_name = re.sub(r"[^\w]", "_", col_name)   # replace non-alphanumeric with _
+        col_name = re.sub(r"_+", "_", col_name)      # collapse multiple _
+        col_name = col_name.strip("_")              # trim
+        
+        return col_name
 
-    # Prep and upsert data
-    df_prepped = src.bronze.transforms.prep_bronze_file_df(df)
+    for c in df.columns:
+        new_col = standardize_column_names_silver(c)
+        cleaned_cols.append(new_col)
+    
+    return df.toDF(*cleaned_cols)
 
-    record_count = df_prepped.count()
-    print(f"Loading {record_count:,} records into {table_name}")
+def prep_silver_df(df: DataFrame) -> DataFrame:
+    """ 
+    Main function for silver layer dataframe preparation
+    """
+    df = clean_columns_silver(df)
 
-    upsert_table(table_name, df_prepped, natural_key, spark)
+    # Replace "NA" strings with null across all columns
+    string_cols = [
+        field.name for field in df.schema.fields 
+        if str(field.dataType) == "StringType()"
+    ]
+    for col_name in string_cols:
+        df = df.withColumn(col_name, F.when(F.col(col_name) == "NA", None).otherwise(F.col(col_name)))
+
+    return df
+    
+
+
+# def bronze_read_prep_upsert(
+#     file_path:str,
+#     file_format:str,
+#     table_name:str,
+#     natural_key:list,
+#     spark:SparkSession,
+#     options: dict[str, str] = field(default_factory=lambda: {
+#         "header": "true",
+#         "inferSchema": "false",
+#     })
+# ) -> None:
+#     """Read, prep, and upsert a bronze table from a file source."""
+    
+#     df = read_bronze_dataset(
+#         file_path,
+#         file_format,
+#         table_name,
+#         natural_key,
+#         spark,
+#         options
+#     )
+
+#     # Prep and upsert data
+#     df_prepped = src.bronze.transforms.prep_bronze_file_df(df)
+
+#     record_count = df_prepped.count()
+#     print(f"Loading {record_count:,} records into {table_name}")
+
+#     upsert_table(table_name, df_prepped, natural_key, spark)
 
 
 

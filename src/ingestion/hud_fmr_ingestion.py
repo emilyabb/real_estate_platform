@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # DBTITLE 1,Setup
 # MAGIC %load_ext autoreload
 # MAGIC %autoreload 2
@@ -90,7 +94,7 @@ print(f"Total counties to fetch: {len(county_detail_urls)}")
 # DBTITLE 1,Fetch FMR data from HUD API
 # Retrieve detailed FMR data for each county with rate limiting
 county_details = fetch_all(
-    urls=county_detail_urls,
+    urls=county_detail_urls[:10],
     token=token,
     request_fn=hud_common.retrieve_hud_json
 )
