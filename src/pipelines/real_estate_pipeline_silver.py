@@ -94,8 +94,12 @@ def create_silver_redfin_table(t):
     table_name = t["table_name"]
     natural_key = t["natural_key"]
     
+
+    #TODO -- determine natural/primary key for each individual redfin table
     @dp.table(
         name=f"silver_dev.redfin.{table_name}",
+        replace_using=natural_key,
+        sequence_by="last_updated",
         comment=f"Silver layer: Cleaned and deduplicated {table_name} data from Redfin",
         table_properties={
             "quality": "silver",
@@ -103,6 +107,8 @@ def create_silver_redfin_table(t):
             "pipelines.autoOptimize.zOrderCols": ",".join([col.replace(" ", "_").lower() for col in natural_key])
         }
     )
+    @dp.expect_or_drop("valid_period", "period_end >= period_begin")
+    @dp.expect_or_drop("has_last_updated", "last_updated IS NOT NULL")
     def load():
 
         df = spark.readStream.table(f"bronze_dev.redfin.{table_name}")        
@@ -121,11 +127,14 @@ def create_silver_redfin_table(t):
         # Deduplicate: Use natural_key + LAST_UPDATED
         # Keep the most recent record per natural key
         natural_key_cols = [col.replace(" ", "_").lower() for col in natural_key]
-        
         # window_spec = Window.partitionBy(*natural_key_cols).orderBy(F.col("last_updated").desc())
         # df = df.withColumn("_row_num", F.row_number().over(window_spec))
         # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-        
+
+        df = df.withColumn("primary_key", F.concat(*natural_key_cols))
+        # df = df.dropDuplicates(F.col("primary_key"), F.col("last_updated"))  
+
+
         # Add processing timestamp
         df = df.withColumn("_processed_timestamp", F.current_timestamp())
         
@@ -142,8 +151,10 @@ for t in REDFIN_TABLES:
 # OPPORTUNITY INSIGHTS SILVER
 # ==========================================================
 
-@dp.materialized_view(
-    name="silver_dev.opportunity_insights.social_capital_zip_mv",
+@dp.table(
+    name="silver_dev.opportunity_insights.social_capital_zip",
+    replace_using=["zip_code"],
+    sequence_by="_ingest_timestamp",
     comment="Silver layer: Cleaned and standardized social capital by zipcode data from Opportunity Insights",
     table_properties={
         "quality": "silver",
@@ -161,7 +172,7 @@ def social_capital_zip():
     - Deduplicate by zip_code
     - Add processing timestamp
     """
-    df = spark.read.table("bronze_dev.opportunity_insights.social_capital_zip")
+    df = spark.readStream.table("bronze_dev.opportunity_insights.social_capital_zip")
     
     # Rename and cast columns in the order specified
     df = df.select(
@@ -196,10 +207,10 @@ def social_capital_zip():
     
     # Deduplicate by zip_code, keeping the most recent record by _ingest_timestamp
     # Use _source_file as a stable tie-breaker for deterministic ordering
-    window_spec = Window.partitionBy("zip_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
-    df = df.withColumn("_row_num", F.row_number().over(window_spec))
-    df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-    
+    # window_spec = Window.partitionBy("zip_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
+    # df = df.withColumn("_row_num", F.row_number().over(window_spec))
+    # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
+    df = df.dropDuplicates(F.col("zip_code"), F.col("_ingest_timestamp"))
     # Add processing timestamp
     df = df.withColumn("_processed_timestamp", F.current_timestamp())
     
@@ -210,8 +221,8 @@ def social_capital_zip():
 # CENSUS BUREAU SILVER
 # ==========================================================
 
-@dp.materialized_view(
-    name="silver_dev.census_bureau.american_community_survey_zcta_mv",
+@dp.table(
+    name="silver_dev.census_bureau.american_community_survey_zcta",
     comment="Silver layer: Cleaned and standardized American Community Survey ZCTA-level data from Census Bureau",
     table_properties={
         "quality": "silver",
@@ -229,7 +240,7 @@ def american_community_survey_zcta():
     - Deduplicate by zcta_code
     - Add processing timestamp
     """
-    df = spark.read.table("bronze_dev.census_bureau.american_community_survey_zcta")
+    df = spark.readStream.table("bronze_dev.census_bureau.american_community_survey_zcta")
     
     # Rename and cast columns in the order specified
     df = df.select(
@@ -250,9 +261,9 @@ def american_community_survey_zcta():
     
     # Deduplicate by zcta_code, keeping the most recent record by _ingest_timestamp
     # Use _source_file as a stable tie-breaker for deterministic ordering
-    window_spec = Window.partitionBy("zcta_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
-    df = df.withColumn("_row_num", F.row_number().over(window_spec))
-    df = df.filter(F.col("_row_num") == 1).drop("_row_num")
+    # window_spec = Window.partitionBy("zcta_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
+    # df = df.withColumn("_row_num", F.row_number().over(window_spec))
+    # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
     
     # Add processing timestamp
     df = df.withColumn("_processed_timestamp", F.current_timestamp())

@@ -1,6 +1,6 @@
 import dlt
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType, ArrayType
+from pyspark.sql.types import StringType, ArrayType, StructType, StructField, IntegerType
 
 from src.utils.sources_ref import REDFIN_TABLES, REDFIN_VOLUME_BASE, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG, CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG
 
@@ -139,6 +139,63 @@ def bronze_hud_counties():
             F.col("county.category").alias("category"),
             F.col("county.town_name").alias("town_name"),
             F.current_timestamp().alias("_ingest_timestamp")
+        )
+    )
+
+
+@dlt.table(
+    name="bronze_dev.hud.fair_market_rents_county",
+    comment="Bronze layer: HUD Fair Market Rents by county and zip code",
+    table_properties={
+        "quality": "bronze",
+        "pipelines.autoOptimize.zOrderCols": "county_name,zip_code,year"
+    }
+)
+def bronze_hud_fair_market_rents_county():
+    """Load HUD Fair Market Rent data from volume."""
+    return (
+        spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("multiLine", "true")
+        .option("cloudFiles.schemaLocation", f"{SCHEMA_LOCATION_BASE}/hud_fmr")
+        .load("/Volumes/bronze_dev/hud/hud_raw/fair_market_rents_county/fmr_data_*.json")
+        # Extract nested data structure
+        .select(
+            F.col("data.data").alias("fmr_data"),
+            F.col("url").alias("source_url")
+        )
+        # Parse the basicdata JSON string to array
+        .withColumn("basicdata_array", F.from_json(
+            "fmr_data.basicdata",
+            ArrayType(StructType([
+                StructField("zip_code", StringType()),
+                StructField("Efficiency", IntegerType()),
+                StructField("One-Bedroom", IntegerType()),
+                StructField("Two-Bedroom", IntegerType()),
+                StructField("Three-Bedroom", IntegerType()),
+                StructField("Four-Bedroom", IntegerType())
+            ]))
+        ))
+        # Explode to get one row per zip code
+        .withColumn("zip_data", F.explode("basicdata_array"))
+        .select(
+            F.col("fmr_data.county_name").alias("county_name"),
+            F.col("fmr_data.metro_name").alias("metro_name"),
+            F.col("fmr_data.area_name").alias("area_name"),
+            F.col("fmr_data.metro_status").alias("metro_status"),
+            F.col("fmr_data.smallarea_status").alias("smallarea_status"),
+            F.col("fmr_data.year").alias("year"),
+            F.col("zip_data.zip_code").alias("zip_code"),
+            F.col("zip_data.Efficiency").alias("efficiency"),
+            F.col("zip_data.One-Bedroom").alias("one_bedroom"),
+            F.col("zip_data.Two-Bedroom").alias("two_bedroom"),
+            F.col("zip_data.Three-Bedroom").alias("three_bedroom"),
+            F.col("zip_data.Four-Bedroom").alias("four_bedroom"),
+            F.col("source_url").alias("source_url"),
+            F.current_timestamp().alias("_ingest_timestamp"),
+            F.col("_metadata.file_path").alias("_source_file")
         )
     )
 
