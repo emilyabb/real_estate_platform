@@ -1,43 +1,40 @@
-## Bronze Layer Data Sources
-
-- **census_bureau**
-  - Source: Census API (`https://api.census.gov/data/2023/acs/acs5`)
-  - Table: `bronze_dev.census_bureau.acs_zipcode`
-  - Key: `NAME`
-  - Notes: American Community Survey data by ZIP code
-
-- **HUD (Department of Housing and Urban Development)**
-  - Source: 
-  - Table: tbd
-  - Key: tbd
-
-- **opportunity_insights__social_capital_zip**
-  - Source: https://data.humdata.org/.../social_capital_zip.csv
-  - Table: `bronze_dev.opportunity_insights.social_capital_zip`
-  - Key: `zip`
-  - Notes: Social capital metrics by ZIP code
-
-- **redfin__price_drops_zipcode**
-  - Source: `/Volumes/bronze_dev/redfin/redfin_raw/redfin_price_drops_monthly_all_zips_2026_Jan_to_2026_Mar.csv`
-  - Table: `bronze_dev.redfin.price_drops_zipcode`
-  - Key: `REGION_NAME`
-  - Notes: Monthly price drops by ZIP code
-
-- **redfin__housing_market_tracker_zipcode**
-  - Source: `/Volumes/bronze_dev/redfin/redfin_raw/redfin_housing_market_monthly_all_zips_key_metrics_2026_Jan_to_2026_Mar.csv`
-  - Table: `bronze_dev.redfin.housing_market_tracker_zipcode`
-  - Key: `REGION_NAME`
-  - Notes: Housing market key metrics by ZIP code
+## Useful Workflow Tips
 
 
+### Running the pipeline on your local machine
 
+There are two ways to run the pipeline code, and they behave very differently:
 
-# Notes
+- **Databricks CLI / Databricks Asset Bundles** (`databricks bundle deploy && databricks bundle run`)
+  - The code from your PC is **uploaded to Databricks** and executes on **Databricks compute** (the platform).
+  - It runs *your local code* but *on the platform* — the `.py` files are read from your PC, shipped up, and run by Databricks infrastructure.
+  - The version that runs is whatever is on your PC at deploy time.
 
-ACS Technical Documentation
-- https://www.census.gov/programs-surveys/acs/technical-documentation.html
+- **Plain `python real_estate_pipeline_silver.py`** on your PC
+  - Runs **entirely locally** using your local Python/Spark environment.
+  - It does not touch Databricks compute unless the code explicitly connects to a Databricks cluster via a Spark connect string.
 
-Census
-- Overview of the API Discovery Tool: https://www.census.gov/data/developers/updates/new-discovery-tool.html 
-- Had to request a token
-- Available APIs: https://www.census.gov/data/developers/data-sets.html
+> **Note:** If you're running from a local branch (e.g. `pc-branch`) and also making pipeline changes in Databricks on a different branch (e.g. `platform-dev`), the two codebases are independent. Push/pull between branches to sync before deploying from either side.
+
+### Syncing between local and Databricks
+
+`databricks sync` syncs a local directory to a **workspace directory** (like `/Workspace/Users/.../my-folder`), not to a **Git repo folder** (`/Repos/...`). Since this project lives in a Git repo, `databricks sync` won't work — use Git itself:
+
+```bash
+# Push from your PC (pc-branch)
+git push origin pc-branch
+
+# Push from Databricks (platform-dev)
+git push origin platform-dev
+
+# Pull the other branch's changes when you need them locally
+git fetch origin
+git merge origin/platform-dev
+```
+
+Other options:
+
+- **`databricks bundle sync --watch`** (part of DABs) — continuously syncs local files to the bundle's deployment target in the workspace. This is for **deployment**, not for keeping two Git branches in sync.
+- **A Git alias or script on your PC** — e.g. `git push origin pc-branch && git fetch origin` run periodically, so you can merge `platform-dev` changes whenever they land.
+
+Git push/pull isn't automatic like `--watch`, but it's reliable, handles conflicts explicitly, and keeps a clean history.
