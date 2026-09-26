@@ -98,7 +98,7 @@ def create_silver_redfin_table(t):
     #TODO -- determine natural/primary key for each individual redfin table
     @dp.table(
         name=f"silver_dev.redfin.{table_name}",
-        replace_using=natural_key,
+        replace_using=natural_key_silver,
         sequence_by="last_updated",
         comment=f"Silver layer: Cleaned and deduplicated {table_name} data from Redfin",
         table_properties={

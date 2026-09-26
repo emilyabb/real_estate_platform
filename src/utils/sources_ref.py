@@ -28,21 +28,23 @@ REDFIN_VOLUME_BASE = "/Volumes/bronze_dev/redfin/redfin_raw"
 REDFIN_TABLES = [
     {
         'table_name': f"{d}_{s}",
-        # "local_path": f"{volume_path}/{d}_{g}.csv",
-        # "remote_path": (
-        #     f"s3://redfin-public-data/redfin_data_center/"
-        #     f"{d}/monthly/all_{g}.csv"
-        # ),
-        # "schema_name": "redfin",
         "natural_key": DEFAULT_KEY,
         "bronze_key": [*DEFAULT_KEY, "LAST UPDATED"],
+        "natural_key_silver": [k.lower().replace(" ","_") for k in DEFAULT_KEY],
         "redfin_dir": d,
         "redfin_grain": g
     }
     for d in DIRECTORIES
     for g, s in GRAINS.items()
 ]
-
+# For pipeline testing, remove large tables
+REDFIN_TABLES = [
+    t for t in REDFIN_TABLES
+    if t["table_name"] not in [
+        "housing_market_zipcode",
+        "housing_market_neighborhood",
+    ]
+]
 
 
 # -------------------------------------------------------------------
@@ -75,4 +77,5 @@ if __name__ == "__main__":
     print('Redfin tables -------------------------------------------------------')
     for t in REDFIN_TABLES:
         print(t["table_name"])
+        print(t["natural_key_silver"])
 

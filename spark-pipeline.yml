@@ -1,0 +1,8 @@
+name: real_estate_platform
+
+libraries:
+  - glob:
+      include: src/pipelines/*.py
+
+storage: /Volumes/bronze_dev/real_estate/_checkpoints
+
