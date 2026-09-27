@@ -4,7 +4,7 @@ from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, IntegerType, DateType
 from pyspark.sql import DataFrame
 
-from src.utils.sources_ref import REDFIN_TABLES
+from src.utils.sources_ref import REDFIN_TABLES, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG
 from src.utils.helpers import clean_columns_silver
 
 # ============================================================================
@@ -53,6 +53,7 @@ def cast_redfin_columns(df: DataFrame) -> DataFrame:
     """
     # Define columns that should remain as strings
     keep_as_string = ["region_id", "region_name", "region_type", "metro", "frequency"]
+    
     # Metadata columns to keep untouched
     metadata_cols = ["_ingest_timestamp", "_rescued_data", "_source_file"]
     
@@ -93,9 +94,9 @@ def create_silver_redfin_table(t):
     """
     table_name = t["table_name"]
     natural_key = t["natural_key"]
+    natural_key_silver = t["natural_key_silver"]
     
 
-    #TODO -- determine natural/primary key for each individual redfin table
     @dp.table(
         name=f"silver_dev.redfin.{table_name}",
         replace_using=natural_key_silver,
@@ -123,17 +124,6 @@ def create_silver_redfin_table(t):
         
         # Cast columns to appropriate types (Redfin-specific logic)
         df = cast_redfin_columns(df)
-        
-        # Deduplicate: Use natural_key + LAST_UPDATED
-        # Keep the most recent record per natural key
-        natural_key_cols = [col.replace(" ", "_").lower() for col in natural_key]
-        # window_spec = Window.partitionBy(*natural_key_cols).orderBy(F.col("last_updated").desc())
-        # df = df.withColumn("_row_num", F.row_number().over(window_spec))
-        # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-
-        df = df.withColumn("primary_key", F.concat(*natural_key_cols))
-        # df = df.dropDuplicates(F.col("primary_key"), F.col("last_updated"))  
-
 
         # Add processing timestamp
         df = df.withColumn("_processed_timestamp", F.current_timestamp())
@@ -150,10 +140,10 @@ for t in REDFIN_TABLES:
 # ==========================================================
 # OPPORTUNITY INSIGHTS SILVER
 # ==========================================================
-
+opp_insights_silver_key = OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG["silver_key"]
 @dp.table(
     name="silver_dev.opportunity_insights.social_capital_zip",
-    replace_using=["zip_code"],
+    replace_using=opp_insights_silver_key,
     sequence_by="_ingest_timestamp",
     comment="Silver layer: Cleaned and standardized social capital by zipcode data from Opportunity Insights",
     table_properties={
@@ -162,6 +152,8 @@ for t in REDFIN_TABLES:
         "pipelines.autoOptimize.zOrderCols": "zip_code"
     }
 )
+@dp.expect_or_drop("has_zip_code", "zip_code IS NOT NULL")
+@dp.expect_or_drop("has_county_fips", "county_fips_code IS NOT NULL")
 def social_capital_zip():
     """Silver transformation for Opportunity Insights social capital data.
     
@@ -205,13 +197,6 @@ def social_capital_zip():
         F.col("_source_file")
     )
     
-    # Deduplicate by zip_code, keeping the most recent record by _ingest_timestamp
-    # Use _source_file as a stable tie-breaker for deterministic ordering
-    # window_spec = Window.partitionBy("zip_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
-    # df = df.withColumn("_row_num", F.row_number().over(window_spec))
-    # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-    df = df.dropDuplicates(F.col("zip_code"), F.col("_ingest_timestamp"))
-    # Add processing timestamp
     df = df.withColumn("_processed_timestamp", F.current_timestamp())
     
     return df
@@ -220,7 +205,6 @@ def social_capital_zip():
 # ==========================================================
 # CENSUS BUREAU SILVER
 # ==========================================================
-
 @dp.table(
     name="silver_dev.census_bureau.american_community_survey_zcta",
     comment="Silver layer: Cleaned and standardized American Community Survey ZCTA-level data from Census Bureau",
@@ -237,12 +221,10 @@ def american_community_survey_zcta():
     - Rename Census variable codes to descriptive names
     - Cast zip and NAME to string (ZCTA codes should be strings to preserve leading zeros)
     - Cast demographic variables to int or double as specified
-    - Deduplicate by zcta_code
     - Add processing timestamp
     """
     df = spark.readStream.table("bronze_dev.census_bureau.american_community_survey_zcta")
     
-    # Rename and cast columns in the order specified
     df = df.select(
         F.col("NAME").cast("string").alias("zcta_name"),
         F.col("zip").cast("string").alias("zcta_code"),
@@ -258,14 +240,8 @@ def american_community_survey_zcta():
         F.col("_ingest_timestamp"),
         F.col("_source_file")
     )
-    
-    # Deduplicate by zcta_code, keeping the most recent record by _ingest_timestamp
-    # Use _source_file as a stable tie-breaker for deterministic ordering
-    # window_spec = Window.partitionBy("zcta_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
-    # df = df.withColumn("_row_num", F.row_number().over(window_spec))
-    # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-    
-    # Add processing timestamp
+
+    # Distinct from ingestion time: records when this transformation ran.
     df = df.withColumn("_processed_timestamp", F.current_timestamp())
     
     return df
