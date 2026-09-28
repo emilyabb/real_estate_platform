@@ -4,7 +4,7 @@ from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, IntegerType, DateType
 from pyspark.sql import DataFrame
 
-from src.utils.sources_ref import REDFIN_TABLES, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG
+from src.utils.sources_ref import REDFIN_TABLES, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG, HUD_FAIR_MARKET_RENTS_CONFIG
 from src.utils.helpers import clean_columns_silver
 
 # ============================================================================
@@ -248,12 +248,53 @@ def american_community_survey_zcta():
 
 
 # ==========================================================
-# HUD REFERENCE - SILVER (if needed)
+# HUD FAIR MARKET RENTS - SILVER
 # ==========================================================
-
-# NOTE: States and counties may not need silver versions
-# They're already clean reference data from the API
-# Consider silver only if you need:
-# - Additional enrichment
-# - Derived fields
-# - Quality checks beyond bronze
+hud_fmr_silver_key = HUD_FAIR_MARKET_RENTS_CONFIG["silver_key"]
+@dp.table(
+    name="silver_dev.hud.fair_market_rents_county",
+    replace_using=hud_fmr_silver_key,
+    sequence_by="_ingest_timestamp",
+    comment="Silver layer: Cleaned and standardized HUD Fair Market Rents by county and zip code",
+    table_properties={
+        "quality": "silver",
+        "delta.columnMapping.mode": "name",
+        "pipelines.autoOptimize.zOrderCols": "county_name,zip_code,year"
+    }
+)
+@dp.expect_or_drop("has_zip_code", "zip_code IS NOT NULL")
+@dp.expect_or_drop("has_year", "year IS NOT NULL")
+def fair_market_rents_county():
+    """Silver transformation for HUD Fair Market Rents data.
+    
+    Transformations:
+    - Cast year from string to int
+    - Keep rent columns (efficiency, one_bedroom, etc.) as int
+    - Keep text columns (county_name, metro_name, area_name, etc.) as string
+    - Deduplicate by county_name, zip_code, year
+    - Add processing timestamp
+    """
+    df = spark.readStream.table("bronze_dev.hud.fair_market_rents_county")
+    
+    df = df.select(
+        F.col("county_name"),
+        F.col("metro_name"),
+        F.col("area_name"),
+        F.col("metro_status"),
+        F.col("smallarea_status"),
+        F.col("year").cast("int").alias("year"),
+        F.col("zip_code"),
+        F.col("efficiency"),
+        F.col("one_bedroom"),
+        F.col("two_bedroom"),
+        F.col("three_bedroom"),
+        F.col("four_bedroom"),
+        F.col("source_url"),
+        # Metadata columns
+        F.col("_ingest_timestamp"),
+        F.col("_source_file")
+    )
+    
+    df = df.withColumn("_processed_timestamp", F.current_timestamp())
+    
+    return df

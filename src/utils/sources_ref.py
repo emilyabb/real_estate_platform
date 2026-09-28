@@ -74,6 +74,16 @@ CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG = {
 }
 
 
+# -------------------------------------------------------------------
+# HUD FAIR MARKET RENTS
+# -------------------------------------------------------------------
+HUD_FAIR_MARKET_RENTS_CONFIG = {
+    "bronze_table_name": "fair_market_rents_county",
+    "natural_key": ["county_name", "zip_code", "year"],
+    "silver_key": ["county_name", "zip_code", "year"],
+}
+
+
 if __name__ == "__main__":
         
     print('Redfin tables -------------------------------------------------------')
