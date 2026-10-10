@@ -12,9 +12,6 @@ SCHEMA_LOCATION_BASE = "/Volumes/bronze_dev/real_estate/_schemas"
 # BRONZE LAYER - Auto Loader Streaming Tables from Volumes
 # ============================================================================
 
-# TEMPORARY NOTES
-# Where to add bronze processing (clean column names)? Or maybe it's no longer necessary.
-# #todo Add LAST_UPDATED to redfin keys for bronze. However with silver use LAST_UPDATED as a tiebreaker
 # Deduping happens in silver layer -- however bronze layer should be idempotent
 
 # ==========================================================
@@ -82,7 +79,7 @@ def bronze_opportunity_insights_social_capital_zip():
 
 
 # ==========================================================
-# HUD REFERENCE DATA (States & Counties)
+# HUD REFERENCE DATA (States & Counties) - Batch reads (static reference data)
 # ==========================================================
 
 @dlt.table(
@@ -94,14 +91,11 @@ def bronze_opportunity_insights_social_capital_zip():
     }
 )
 def bronze_hud_states():
-    """Load HUD state reference data from volume."""
+    """Load HUD state reference data from volume (batch read — static reference data)."""
     return (
-        spark.readStream
-        .format("cloudFiles")
-        .option("cloudFiles.format", "json")
-        .option("cloudFiles.inferColumnTypes", "true")
+        spark.read
+        .format("json")
         .option("multiLine", "true")
-        .option("cloudFiles.schemaLocation", f"{SCHEMA_LOCATION_BASE}/hud_states")
         .load("/Volumes/bronze_dev/hud/hud_raw/reference_data/states_*.json")
         .select(F.explode("data").alias("state_data"))
         .select(
@@ -121,14 +115,11 @@ def bronze_hud_states():
     }
 )
 def bronze_hud_counties():
-    """Load HUD county reference data from volume."""
+    """Load HUD county reference data from volume (batch read — static reference data)."""
     return (
-        spark.readStream 
-        .format("cloudFiles")
-        .option("cloudFiles.format", "json")
-        .option("cloudFiles.inferColumnTypes", "true")
+        spark.read
+        .format("json")
         .option("multiLine", "true")
-        .option("cloudFiles.schemaLocation", f"{SCHEMA_LOCATION_BASE}/hud_counties")
         .load("/Volumes/bronze_dev/hud/hud_raw/reference_data/counties_*.json")
         .select(F.explode("data").alias("county"))
         .select(

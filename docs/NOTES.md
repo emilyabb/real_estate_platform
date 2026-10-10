@@ -158,3 +158,39 @@ SDP handles deduplication declaratively through the table decorator:
 ```
 
 This tells the pipeline to use `MERGE` semantics: when a row arrives with the same natural key, the `sequence_by` column determines which version wins (highest value = most recent). This is the SDP-native way to keep only the latest record per key, and it works with streaming reads because the framework manages the merge internally rather than requiring a window function in the transformation code.
+
+## Design Decision: Not Stacking Redfin Tables by Grain
+
+### Context
+
+The Redfin silver tables come in three grains — county, ZIP, and neighborhood — across three data types (housing_market, price_drops, delistings_relistings), for 9 tables total. Investigation confirmed that within each data type, the schemas are identical across grains (same column names, same types) with one exception: `region_name` is `STRING` for county/neighborhood but `INT` for zipcode. The `region_type` column already discriminates cleanly (`'County'`, `'Zip'`, `'Neighborhood'`).
+
+This raised the question: could we "stack" the three grain tables into one per data type (3 tables instead of 9) using `UNION ALL` + `CAST(region_name AS STRING)` for the zipcode tables?
+
+### Decision
+
+**Keep separate grain-specific tables — do not stack.**
+
+The gold tables are enrichment tables, and the enrichment strategy differs fundamentally by grain:
+
+| Grain | External enrichment | Join complexity |
+|---|---|---|
+| County | HUD FMR (aggregate ZIPs → county), ACS (aggregate ZCTAs → county), dim_county | High — needs crosswalks + aggregation |
+| ZIP | social_capital_zip, ACS (direct), HUD FMR (direct) | Medium — direct joins |
+| Neighborhood | None available | Low — Redfin only |
+
+Stacking these into one gold table would mean either carrying a forest of NULLs for grain-specific enrichments or stripping enrichment down to the common denominator (losing the gold layer's value-add). The `region_name` column also becomes polymorphic — a county name, a ZIP integer, or a neighborhood name — so downstream joins need conditional logic keyed on `region_type`, which is fragile.
+
+### Tradeoffs
+
+| | Separate grain tables (chosen) | Stacked tables (rejected) |
+|---|---|---|
+| **Pipeline code** | Triplicated join logic across 3 grains (mitigated with a shared Python function) | Write join logic once, filter by `region_type` |
+| **Gold enrichment** | Each table carries only its grain's enrichment — no NULLs, clear semantics | Must handle all enrichment strategies in one table or drop grain-specific enrichment |
+| **Downstream joins** | Each table joins to its dimension tables on a single, clear key | Joins must branch on `region_type` — polymorphic `region_name` key |
+| **Partition pruning** | Each query naturally scans only its grain | Stacked table includes all grains; partitioning on `region_type` adds overhead |
+| **Table count** | 3 gold tables (one per grain) | 1–3 stacked tables (one per data type, or a single wide table) |
+
+### Implementation Note
+
+The Redfin join logic (housing_market + price_drops + delistings_relistings at the same grain) is identical across the three grains. To avoid triplication, implement a shared Python function that takes the grain as a parameter and builds the join, so each gold table calls `build_redfin_join("county")` instead of repeating the same logic three times. This is a pipeline implementation detail to handle when writing the gold pipeline code.

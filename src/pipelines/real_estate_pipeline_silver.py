@@ -298,3 +298,51 @@ def fair_market_rents_county():
     df = df.withColumn("_processed_timestamp", F.current_timestamp())
     
     return df
+
+
+# ==========================================================
+# HUD DIMENSION TABLES (States & Counties) - Batch reads
+# ==========================================================
+# These are static reference tables — batch read from bronze,
+# not streamed. They serve as dimension lookups for other silver tables.
+
+@dp.table(
+    name="silver_dev.hud.dim_states",
+    comment="Silver layer: Dimension table for HUD states reference data",
+    table_properties={
+        "quality": "silver",
+        "delta.columnMapping.mode": "name",
+        "pipelines.autoOptimize.zOrderCols": "state_code"
+    }
+)
+def dim_states():
+    """Silver dimension table for states.
+    
+    Batch read from bronze since this is static reference data
+    that rarely changes (updated only when HUD publishes new reference files).
+    """
+    df = spark.read.table("bronze_dev.hud.states")
+    df = clean_columns_silver(df)
+    df = df.withColumn("_processed_timestamp", F.current_timestamp())
+    return df
+
+
+@dp.table(
+    name="silver_dev.hud.dim_counties",
+    comment="Silver layer: Dimension table for HUD counties reference data",
+    table_properties={
+        "quality": "silver",
+        "delta.columnMapping.mode": "name",
+        "pipelines.autoOptimize.zOrderCols": "fips_code,state_code"
+    }
+)
+def dim_counties():
+    """Silver dimension table for counties.
+    
+    Batch read from bronze since this is static reference data
+    that rarely changes (updated only when HUD publishes new reference files).
+    """
+    df = spark.read.table("bronze_dev.hud.counties")
+    df = clean_columns_silver(df)
+    df = df.withColumn("_processed_timestamp", F.current_timestamp())
+    return df

@@ -22,9 +22,16 @@
 - Created `shared-dev` branch from `platform-dev` for both local PC and Databricks to share.
 - Local PC work on `pc-branch`.
 
+
+
+**Next steps**
+- Bring in HUD dim tables (minimal effort)
+- Gold mapping
+
+
 # Issues Encountered
 
-## `replace_using` / `sequence_by` not supported on this runtime
+## `replace_using` / `sequence_by` not supported on this runtime even though it was working for us before
 
 When running the silver pipeline, the pipeline fails with:
 
