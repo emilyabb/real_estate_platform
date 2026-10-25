@@ -75,6 +75,18 @@ CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG = {
 
 
 # -------------------------------------------------------------------
+# USPS ZIP CODES
+# -------------------------------------------------------------------
+USPS_ZIP_CODES_CONFIG = {
+    "bronze_table_name": "usps_zip_codes",
+    "natural_key": ["zip_code"],
+    "bronze_key": ["zip_code", "_ingest_timestamp"],
+    "silver_key": ["zip_code"],
+    "csv_directory": "/Volumes/bronze_dev/geo_re/geo_re_raw/usps_zip_codes"
+}
+
+
+# -------------------------------------------------------------------
 # HUD FAIR MARKET RENTS
 # -------------------------------------------------------------------
 HUD_FAIR_MARKET_RENTS_CONFIG = {

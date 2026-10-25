@@ -2,7 +2,7 @@ import dlt
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, ArrayType, StructType, StructField, IntegerType
 
-from src.utils.sources_ref import REDFIN_TABLES, REDFIN_VOLUME_BASE, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG, CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG
+from src.utils.sources_ref import REDFIN_TABLES, REDFIN_VOLUME_BASE, OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG, CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG, USPS_ZIP_CODES_CONFIG
 
 
 SCHEMA_LOCATION_BASE = "/Volumes/bronze_dev/real_estate/_schemas"
@@ -241,6 +241,29 @@ def bronze_census_bureau_american_community_survey():
     )
 
 
+# ==========================================================
+# USPS ZIP CODES (Reference data) - Batch read (static reference data)
+# ==========================================================
 
-
-
+usps_zip_bronze_key = ",".join(USPS_ZIP_CODES_CONFIG["bronze_key"])
+usps_zip_table_name = USPS_ZIP_CODES_CONFIG["bronze_table_name"]
+@dlt.table(
+    name=f"bronze_dev.geo_re.{usps_zip_table_name}",
+    comment="Bronze layer: ZIP code reference data from zip_code_database.csv",
+    table_properties={
+        "quality": "bronze",
+        "pipelines.autoOptimize.zOrderCols": usps_zip_bronze_key
+    }
+)
+def bronze_geo_re_usps_zip_codes():
+    """Load ZIP code reference data from volume (batch read — static reference data)."""
+    directory = USPS_ZIP_CODES_CONFIG["csv_directory"]
+    return (
+        spark.read
+        .format("csv")
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .load(f"{directory}/zip_code_database_*.csv")
+        .withColumn("_ingest_timestamp", F.current_timestamp())
+        .withColumn("_source_file", F.col("_metadata.file_path"))
+    )

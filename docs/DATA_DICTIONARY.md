@@ -13,6 +13,10 @@ This document maps every column from the bronze layer to its corresponding silve
 4. [Opportunity Insights: social_capital_zip](#4-opportunity-insights-social_capital_zip)
 5. [Census Bureau: american_community_survey_zcta](#5-census-bureau-american_community_survey_zcta)
 6. [HUD: fair_market_rents_county](#6-hud-fair_market_rents_county)
+7. [Gold Layer: Fact Tables](#7-gold-layer-fact-tables)
+    - [7a. county_housing_profile](#7a-county_housing_profile)
+    - [7b. zip_market_health](#7b-zip_market_health)
+    - [7c. neighborhood_market_activity](#7c-neighborhood_market_activity)
 
 ---
 
@@ -49,8 +53,15 @@ The columns unique to each table type are listed in the subsections below.
 
 ## 1a. Redfin: housing_market (unique columns)
 
-**Bronze tables:** `bronze_dev.redfin.housing_market_county`, `bronze_dev.redfin.housing_market_zipcode`, `bronze_dev.redfin.housing_market_neighborhood`
-**Silver tables:** `silver_dev.redfin.housing_market_county`, `silver_dev.redfin.housing_market_zipcode`, `silver_dev.redfin.housing_market_neighborhood`
+**Bronze tables:** 
+* `bronze_dev.redfin.housing_market_county` 
+* `bronze_dev.redfin.housing_market_zipcode`
+* `bronze_dev.redfin.housing_market_neighborhood`
+
+**Silver tables:** 
+* `silver_dev.redfin.housing_market_county` 
+* `silver_dev.redfin.housing_market_zipcode`
+* `silver_dev.redfin.housing_market_neighborhood`
 
 | Bronze Column | Silver Column | Notes |
 | --- | --- | --- |
@@ -235,3 +246,174 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 | `_ingest_timestamp` | `_ingest_timestamp` | Metadata, unchanged |
 | `_source_file` | `_source_file` | Metadata, unchanged |
 | *(none)* | `_processed_timestamp` | **Silver only** — added via `F.current_timestamp()` |
+
+---
+
+## 7. Gold Layer: Fact Tables
+
+**Pipeline file:** `src/pipelines/real_estate_pipeline_gold.py`
+
+**Pattern:** Batch reads (`spark.read.table()`) from silver → materialized views. Each gold fact table joins three Redfin silver tables at the same grain: `housing_market` (base) left-joined with `price_drops` and `delistings_relistings` on `region_name` + `period_begin` + `period_end`.
+
+**Gold transformations:**
+- Pipeline metadata columns dropped (`rescued_data`, `ingest_timestamp`, `source_file`, `_processed_timestamp`) — gold exposes only business-relevant columns.
+- Common columns (`last_updated`, `frequency`, `region_type`, `metro`) retained from the base `housing_market` table only; enrichment tables skip these to avoid conflicts.
+- `gold_refresh_timestamp` added via `F.current_timestamp()` for freshness tracking.
+
+**Future enrichment (not yet included):**
+- `county_housing_profile`: `geo_re.dim_county` (state/FIPS), HUD FMR (rental context), ACS (demographics)
+- `zip_market_health`: `social_capital_zip` (opportunity metrics), ACS ZCTA (demographics), HUD FMR (rental context)
+- `neighborhood_market_activity`: no external enrichment sources available at this grain
+
+---
+
+### 7a. county_housing_profile
+
+**Gold table:** `gold_dev.default.county_housing_profile`
+**Grain:** One row per county per time period (`region_name` × `period_begin` × `period_end`)
+**Row count:** ~529,000
+
+**Business rationale:** Provides a single, analytics-ready county-level housing market view by combining Redfin sales activity (prices, inventory, days on market) with price drop trends and delisting/relisting behavior. Designed for county-level market analysis, trend comparison across regions, and dashboard reporting. Will be enriched with HUD fair market rents and ACS demographics in a future iteration to support affordability and demographic context analysis.
+
+**Source tables:**
+
+| Silver Source | Join Type | Role |
+| --- | --- | --- |
+| `silver_dev.redfin.housing_market_county` | base | Sales, prices, inventory, days on market |
+| `silver_dev.redfin.price_drops_county` | left join | Price drop activity |
+| `silver_dev.redfin.delistings_relistings_county` | left join | Delisting/relisting activity |
+
+**Columns (from housing_market_county — base):**
+
+| Silver Column | Type | Notes |
+| --- | --- | --- |
+| `last_updated` | date | Redfin data freshness |
+| `frequency` | string | Reporting frequency |
+| `period_begin` | date | Join key |
+| `period_end` | date | Join key |
+| `region_id` | int | Redfin region identifier |
+| `region_type` | string | Always `'County'` |
+| `region_name` | string | Join key — county name (e.g., "Adams County, PA") |
+| `metro` | string | Metro area name |
+| `homes_sold` | double | Homes sold in period |
+| `homes_sold_mom` | double | Month-over-month change |
+| `homes_sold_yoy` | double | Year-over-year change |
+| `median_sale_price_nsa` | double | Median sale price (not seasonally adjusted) |
+| `median_sale_price_nsa_mom` | double | MoM change |
+| `median_sale_price_nsa_yoy` | double | YoY change |
+| `median_days_on_market_days` | double | Median days on market |
+| `median_days_on_market_mom` | double | MoM change |
+| `median_days_on_market_yoy` | double | YoY change |
+| `average_sale_to_list_ratio` | double | Sale-to-list ratio |
+| `average_sale_to_list_ratio_mom_ppts` | double | MoM change (percentage points) |
+| `average_sale_to_list_ratio_yoy_ppts` | double | YoY change (percentage points) |
+| `share_sold_above_original_list` | double | Share sold above list price |
+| `share_sold_above_original_list_mom_ppts` | double | MoM change |
+| `share_sold_above_original_list_yoy_ppts` | double | YoY change |
+| `new_listings` | double | New listings in period |
+| `new_listings_mom` | double | MoM change |
+| `new_listings_yoy` | double | YoY change |
+| `active_listings` | double | Active listings |
+| `active_listings_mom` | double | MoM change |
+| `active_listings_yoy` | double | YoY change |
+| `inventory` | double | Housing inventory |
+| `inventory_mom` | double | MoM change |
+| `inventory_yoy` | double | YoY change |
+| `pending_sales` | double | Pending sales |
+| `pending_sales_mom` | double | MoM change |
+| `pending_sales_yoy` | double | YoY change |
+| `median_new_listing_price` | double | Median new listing price |
+| `median_new_listing_price_mom` | double | MoM change |
+| `median_new_listing_price_yoy` | double | YoY change |
+| `median_new_listing_price_per_sq_ft` | double | Median new listing price per sq ft |
+| `median_new_listing_price_per_sq_ft_mom` | double | MoM change |
+| `median_new_listing_price_per_sq_ft_yoy` | double | YoY change |
+| `median_sale_price_per_sq_ft` | double | Median sale price per sq ft |
+| `median_sale_price_per_sq_ft_mom` | double | MoM change |
+| `median_sale_price_per_sq_ft_yoy` | double | YoY change |
+| `months_of_supply` | double | Months of housing supply |
+| `months_of_supply_mom` | double | MoM change |
+| `months_of_supply_yoy` | double | YoY change |
+| `percent_off_market_in_two_weeks` | double | % off market in 2 weeks |
+| `percent_off_market_in_two_weeks_mom_ppts` | double | MoM change |
+| `percent_off_market_in_two_weeks_yoy_ppts` | double | YoY change |
+
+**Columns (from price_drops_county — left join):**
+
+| Silver Column | Type | Notes |
+| --- | --- | --- |
+| `price_drops` | double | Number of price drops |
+| `price_drops_mom` | double | MoM change |
+| `price_drops_yoy` | double | YoY change |
+| `average_size_of_price_drop` | double | Avg % reduction |
+| `average_size_of_price_drop_mom_ppts` | double | MoM change |
+| `average_size_of_price_drop_yoy_ppts` | double | YoY change |
+| `percent_active_with_price_drops` | double | % active listings with price drops |
+| `percent_active_with_price_drops_mom_ppts` | double | MoM change |
+| `percent_active_with_price_drops_yoy_ppts` | double | YoY change |
+| `homes_sold_with_price_drops` | double | Homes sold after price drop |
+| `homes_sold_with_price_drops_mom` | double | MoM change |
+| `homes_sold_with_price_drops_yoy` | double | YoY change |
+
+**Columns (from delistings_relistings_county — left join):**
+
+| Silver Column | Type | Notes |
+| --- | --- | --- |
+| `total_delistings` | double | Total delistings in period |
+| `total_delistings_mom` | double | MoM change |
+| `total_delistings_yoy` | double | YoY change |
+| `total_relistings` | double | Total relistings in period |
+| `total_relistings_mom` | double | MoM change |
+| `total_relistings_yoy` | double | YoY change |
+| `share_of_listings_delisted` | double | Share of listings delisted |
+| `share_of_listings_delisted_mom_ppts` | double | MoM change |
+| `share_of_listings_delisted_yoy_ppts` | double | YoY change |
+| `share_of_listings_relisted` | double | Share of listings relisted |
+| `share_of_listings_relisted_mom_ppts` | double | MoM change |
+| `share_of_listings_relisted_yoy_ppts` | double | YoY change |
+
+**Gold-added column:**
+
+| Gold Column | Type | Notes |
+| --- | --- | --- |
+| `gold_refresh_timestamp` | timestamp | Pipeline refresh time, added via `F.current_timestamp()` |
+
+---
+
+### 7b. zip_market_health
+
+**Gold table:** `gold_dev.default.zip_market_health`
+**Grain:** One row per ZIP code per time period (`region_name` × `period_begin` × `period_end`) — time-series
+**Row count:** ~4.9 million
+
+**Business rationale:** Delivers a comprehensive ZIP-level market health view combining Redfin sales metrics with price drop and delisting/relisting signals. Built as time-series to preserve trend analysis; dashboards needing a single-row-per-ZIP snapshot can filter to the latest period (`WHERE period_begin = (SELECT MAX(period_begin) FROM gold_dev.default.zip_market_health)`). Will be enriched with Opportunity Insights social capital data, Census ACS demographics, and HUD fair market rents to support neighborhood-level affordability and opportunity analysis.
+
+**Source tables:**
+
+| Silver Source | Join Type | Role |
+| --- | --- | --- |
+| `silver_dev.redfin.housing_market_zipcode` | base | Sales, prices, inventory, days on market |
+| `silver_dev.redfin.price_drops_zipcode` | left join | Price drop activity |
+| `silver_dev.redfin.delistings_relistings_zipcode` | left join | Delisting/relisting activity |
+
+**Columns:** Same structure as `county_housing_profile` (§7a) — all housing market, price drop, and delisting/relisting columns from the three Redfin zipcode silver tables, plus `gold_refresh_timestamp`.
+
+---
+
+### 7c. neighborhood_market_activity
+
+**Gold table:** `gold_dev.default.neighborhood_market_activity`
+**Grain:** One row per neighborhood per time period (`region_name` × `period_begin` × `period_end`)
+**Row count:** ~221 million
+
+**Business rationale:** Provides the most granular Redfin housing market view by combining sales activity, price drops, and delisting/relisting behavior at the neighborhood level. Enables hyperlocal market trend analysis and micro-market identification. No external enrichment sources are currently available at the neighborhood grain — this table stands alone as the complete neighborhood-level market picture.
+
+**Source tables:**
+
+| Silver Source | Join Type | Role |
+| --- | --- | --- |
+| `silver_dev.redfin.housing_market_neighborhood` | base | Sales, prices, inventory, days on market |
+| `silver_dev.redfin.price_drops_neighborhood` | left join | Price drop activity |
+| `silver_dev.redfin.delistings_relistings_neighborhood` | left join | Delisting/relisting activity |
+
+**Columns:** Same structure as `county_housing_profile` (§7a) — all housing market, price drop, and delisting/relisting columns from the three Redfin neighborhood silver tables, plus `gold_refresh_timestamp`.

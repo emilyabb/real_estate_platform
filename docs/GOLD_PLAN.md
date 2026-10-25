@@ -339,9 +339,9 @@ Reference tables now in silver: `silver_dev.hud.dim_states`, `silver_dev.hud.dim
 4. `geo_re.dim_county` (join dim_counties + dim_states — existing silver tables)
 5. Ingest HUD USPS ZIP Code Crosswalk → bronze → silver → `geo_re.dim_zipcode`
 6. Ingest Census Bureau ZCTA Gazetteer → bronze → silver → `geo_re.dim_zcta`
-7. `county_housing_profile` (start with just the 3 Redfin county tables, add FMR + ACS enrichment later)
-8. `zip_market_health` (now includes housing_market_zipcode — decide snapshot vs time-series first)
-9. `neighborhood_market_activity` (now includes housing_market_neighborhood — may just be a view)
+7. `county_housing_profile` — ✅ Base created (`src/pipelines/real_estate_pipeline_gold.py`). Joins 3 Redfin county tables. FMR + ACS enrichment pending.
+8. `zip_market_health` — ✅ Base created. Time-series (one row per ZIP per period). Snapshot can be derived via `WHERE period_begin = MAX(...)`. Social capital + ACS + FMR enrichment pending.
+9. `neighborhood_market_activity` — ✅ Base created. Joins 3 Redfin neighborhood tables. No external enrichment available at this grain yet.
 
 ## Gold layer conventions
 
