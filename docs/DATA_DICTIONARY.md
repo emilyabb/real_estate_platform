@@ -1,6 +1,6 @@
-# Data Dictionary: Bronze → Silver Column Mapping
+# Data Dictionary: Silver and Gold Table Columns
 
-This document maps every column from the bronze layer to its corresponding silver layer column for each table in the real estate platform pipeline. Every bronze column has a silver counterpart; some silver tables add metadata columns (e.g., `_processed_timestamp`) that do not exist in bronze.
+Column-level reference for every silver and gold table in the real estate platform pipeline. Each table section lists column names with descriptions and a link to the upstream data source.
 
 ---
 
@@ -10,6 +10,8 @@ This document maps every column from the bronze layer to its corresponding silve
     - [1a. Redfin: housing_market (unique columns)](#1a-redfin-housing_market-unique-columns)
     - [1b. Redfin: price_drops (unique columns)](#1b-redfin-price_drops-unique-columns)
     - [1c. Redfin: delistings_relistings (unique columns)](#1c-redfin-delistings_relistings-unique-columns)
+2. [HUD: dim_states (reference dimension)](#2-hud-dim_states-reference-dimension)
+3. [HUD: dim_counties (reference dimension)](#3-hud-dim_counties-reference-dimension)
 4. [Opportunity Insights: social_capital_zip](#4-opportunity-insights-social_capital_zip)
 5. [Census Bureau: american_community_survey_zcta](#5-census-bureau-american_community_survey_zcta)
 6. [HUD: fair_market_rents_county](#6-hud-fair_market_rents_county)
@@ -22,6 +24,8 @@ This document maps every column from the bronze layer to its corresponding silve
 
 ## 1. Redfin: common columns (all nine tables)
 
+**Source:** [Redfin Data Center](https://www.redfin.com/news/data-center/)
+
 **Bronze tables:** `bronze_dev.redfin.{housing_market,price_drops,delistings_relistings}_{county,zipcode,neighborhood}`
 **Silver tables:** `silver_dev.redfin.{housing_market,price_drops,delistings_relistings}_{county,zipcode,neighborhood}`
 **Grain:** One row per region (county / ZIP code / neighborhood) per time period (`period_begin` × `period_end`)
@@ -32,26 +36,29 @@ Silver transformations: column names standardized to lowercase snake_case; `"NA"
 
 The following columns are common to all nine Redfin tables (three table types × three grains):
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `LAST UPDATED` | `last_updated` | Cast to DateType |
-| `FREQUENCY` | `frequency` | Kept as string |
-| `PERIOD BEGIN` | `period_begin` | Cast to DateType |
-| `PERIOD END` | `period_end` | Cast to DateType |
-| `REGION ID` | `region_id` | Kept as string |
-| `REGION TYPE` | `region_type` | Kept as string |
-| `REGION NAME` | `region_name` | Kept as string (INT for zipcode tables) |
-| `METRO` | `metro` | Kept as string |
-| `_ingest_timestamp` | `_ingest_timestamp` | Metadata, unchanged |
-| `_source_file` | `_source_file` | Metadata, unchanged |
-| `_rescued_data` | `_rescued_data` | Auto Loader metadata, unchanged |
-| *(none)* | `_processed_timestamp` | **Silver only** — added via `F.current_timestamp()` |
+| Column | Description |
+| --- | --- |
+| `last_updated` | Date Redfin last refreshed this row's metrics |
+| `frequency` | Reporting cadence of the period (e.g. 'monthly') |
+| `period_begin` | First day of the reporting period |
+| `period_end` | Last day of the reporting period |
+| `region_type` | Grain discriminator: 'County', 'Zip', or 'Neighborhood' |
+| `region_name` | Region label for the grain (county name, 5-digit ZIP code, or neighborhood name). Join key across Redfin tables and gold fact tables |
+| `metro` | Metro area the region belongs to |
+| `_ingest_timestamp` | Time the bronze Auto Loader job ingested the raw file |
+| `_source_file` | Raw source file path in the bronze UC volume |
+| `_rescued_data` | Auto Loader quarantine column holding values that failed to parse against the schema |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
+
+> **Note:** The `region_id` column is only present in the `housing_market` family (see §1a). The `price_drops` and `delistings_relistings` silver tables do not include it.
 
 The columns unique to each table type are listed in the subsections below.
 
 ---
 
 ## 1a. Redfin: housing_market (unique columns)
+
+**Source:** [Redfin Data Center](https://www.redfin.com/news/data-center/)
 
 **Bronze tables:** 
 * `bronze_dev.redfin.housing_market_county` 
@@ -63,98 +70,147 @@ The columns unique to each table type are listed in the subsections below.
 * `silver_dev.redfin.housing_market_zipcode`
 * `silver_dev.redfin.housing_market_neighborhood`
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `HOMES SOLD` | `homes_sold` | Cast to DoubleType |
-| `HOMES SOLD MOM (%)` | `homes_sold_mom` | Cast to DoubleType |
-| `HOMES SOLD YOY (%)` | `homes_sold_yoy` | Cast to DoubleType |
-| `MEDIAN SALE PRICE NSA ($)` | `median_sale_price_nsa` | Cast to DoubleType |
-| `MEDIAN SALE PRICE NSA MOM (%)` | `median_sale_price_nsa_mom` | Cast to DoubleType |
-| `MEDIAN SALE PRICE NSA YOY (%)` | `median_sale_price_nsa_yoy` | Cast to DoubleType |
-| `MEDIAN DAYS ON MARKET (DAYS)` | `median_days_on_market_days` | Cast to DoubleType |
-| `MEDIAN DAYS ON MARKET MOM (%)` | `median_days_on_market_mom` | Cast to DoubleType |
-| `MEDIAN DAYS ON MARKET YOY (%)` | `median_days_on_market_yoy` | Cast to DoubleType |
-| `AVERAGE SALE TO LIST RATIO (%)` | `average_sale_to_list_ratio` | Cast to DoubleType |
-| `AVERAGE SALE TO LIST RATIO MOM (PPTS)` | `average_sale_to_list_ratio_mom_ppts` | Divided by 100, cast to DoubleType |
-| `AVERAGE SALE TO LIST RATIO YOY (PPTS)` | `average_sale_to_list_ratio_yoy_ppts` | Divided by 100, cast to DoubleType |
-| `SHARE SOLD ABOVE ORIGINAL LIST (%)` | `share_sold_above_original_list` | Cast to DoubleType |
-| `SHARE SOLD ABOVE ORIGINAL LIST MOM (PPTS)` | `share_sold_above_original_list_mom_ppts` | Divided by 100, cast to DoubleType |
-| `SHARE SOLD ABOVE ORIGINAL LIST YOY (PPTS)` | `share_sold_above_original_list_yoy_ppts` | Divided by 100, cast to DoubleType |
-| `NEW LISTINGS` | `new_listings` | Cast to DoubleType |
-| `NEW LISTINGS MOM (%)` | `new_listings_mom` | Cast to DoubleType |
-| `NEW LISTINGS YOY (%)` | `new_listings_yoy` | Cast to DoubleType |
-| `ACTIVE LISTINGS` | `active_listings` | Cast to DoubleType |
-| `ACTIVE LISTINGS MOM (%)` | `active_listings_mom` | Cast to DoubleType |
-| `ACTIVE LISTINGS YOY (%)` | `active_listings_yoy` | Cast to DoubleType |
-| `INVENTORY` | `inventory` | Cast to DoubleType |
-| `INVENTORY MOM (%)` | `inventory_mom` | Cast to DoubleType |
-| `INVENTORY YOY (%)` | `inventory_yoy` | Cast to DoubleType |
-| `PENDING SALES` | `pending_sales` | Cast to DoubleType |
-| `PENDING SALES MOM (%)` | `pending_sales_mom` | Cast to DoubleType |
-| `PENDING SALES YOY (%)` | `pending_sales_yoy` | Cast to DoubleType |
-| `MEDIAN NEW LISTING PRICE ($)` | `median_new_listing_price` | Cast to DoubleType |
-| `MEDIAN NEW LISTING PRICE MOM (%)` | `median_new_listing_price_mom` | Cast to DoubleType |
-| `MEDIAN NEW LISTING PRICE YOY (%)` | `median_new_listing_price_yoy` | Cast to DoubleType |
-| `MEDIAN NEW LISTING PRICE PER SQ.FT. ($)` | `median_new_listing_price_per_sq_ft` | Cast to DoubleType |
-| `MEDIAN NEW LISTING PRICE PER SQ.FT. MOM (%)` | `median_new_listing_price_per_sq_ft_mom` | Cast to DoubleType |
-| `MEDIAN NEW LISTING PRICE PER SQ.FT. YOY (%)` | `median_new_listing_price_per_sq_ft_yoy` | Cast to DoubleType |
-| `MEDIAN SALE PRICE PER SQ.FT. ($)` | `median_sale_price_per_sq_ft` | Cast to DoubleType |
-| `MEDIAN SALE PRICE PER SQ.FT. MOM (%)` | `median_sale_price_per_sq_ft_mom` | Cast to DoubleType |
-| `MEDIAN SALE PRICE PER SQ.FT. YOY (%)` | `median_sale_price_per_sq_ft_yoy` | Cast to DoubleType |
-| `MONTHS OF SUPPLY` | `months_of_supply` | Cast to DoubleType |
-| `MONTHS OF SUPPLY MOM (%)` | `months_of_supply_mom` | Cast to DoubleType |
-| `MONTHS OF SUPPLY YOY (%)` | `months_of_supply_yoy` | Cast to DoubleType |
-| `PERCENT OFF MARKET IN TWO WEEKS (%)` | `percent_off_market_in_two_weeks` | Cast to DoubleType |
-| `PERCENT OFF MARKET IN TWO WEEKS MOM (PPTS)` | `percent_off_market_in_two_weeks_mom_ppts` | Divided by 100, cast to DoubleType |
-| `PERCENT OFF MARKET IN TWO WEEKS YOY (PPTS)` | `percent_off_market_in_two_weeks_yoy_ppts` | Divided by 100, cast to DoubleType |
+| Column | Description |
+| --- | --- |
+| `region_id` | Redfin numeric region identifier |
+| `homes_sold` | Homes sold in the period |
+| `homes_sold_mom` | Month-over-month change in homes sold, percent |
+| `homes_sold_yoy` | Year-over-year change in homes sold, percent |
+| `median_sale_price_nsa` | Median sale price, not seasonally adjusted, USD |
+| `median_sale_price_nsa_mom` | MoM change in median sale price (NSA), percent |
+| `median_sale_price_nsa_yoy` | YoY change in median sale price (NSA), percent |
+| `median_days_on_market_days` | Median days on market |
+| `median_days_on_market_mom` | MoM change in median days on market, percent |
+| `median_days_on_market_yoy` | YoY change in median days on market, percent |
+| `average_sale_to_list_ratio` | Average sale-to-list price ratio |
+| `average_sale_to_list_ratio_mom_ppts` | MoM change in sale-to-list ratio, percentage points |
+| `average_sale_to_list_ratio_yoy_ppts` | YoY change in sale-to-list ratio, percentage points |
+| `share_sold_above_original_list` | Share of homes sold above their original list price |
+| `share_sold_above_original_list_mom_ppts` | MoM change in share sold above list, percentage points |
+| `share_sold_above_original_list_yoy_ppts` | YoY change in share sold above list, percentage points |
+| `new_listings` | New listings in the period |
+| `new_listings_mom` | MoM change in new listings, percent |
+| `new_listings_yoy` | YoY change in new listings, percent |
+| `active_listings` | Active listings at period end |
+| `active_listings_mom` | MoM change in active listings, percent |
+| `active_listings_yoy` | YoY change in active listings, percent |
+| `inventory` | Housing inventory (active listings) in the period |
+| `inventory_mom` | MoM change in inventory, percent |
+| `inventory_yoy` | YoY change in inventory, percent |
+| `pending_sales` | Pending sales in the period |
+| `pending_sales_mom` | MoM change in pending sales, percent |
+| `pending_sales_yoy` | YoY change in pending sales, percent |
+| `median_new_listing_price` | Median price of new listings, USD |
+| `median_new_listing_price_mom` | MoM change in median new listing price, percent |
+| `median_new_listing_price_yoy` | YoY change in median new listing price, percent |
+| `median_new_listing_price_per_sq_ft` | Median new listing price per square foot, USD |
+| `median_new_listing_price_per_sq_ft_mom` | MoM change, percent |
+| `median_new_listing_price_per_sq_ft_yoy` | YoY change, percent |
+| `median_sale_price_per_sq_ft` | Median sale price per square foot, USD |
+| `median_sale_price_per_sq_ft_mom` | MoM change, percent |
+| `median_sale_price_per_sq_ft_yoy` | YoY change, percent |
+| `months_of_supply` | Months of housing supply at the current sales pace |
+| `months_of_supply_mom` | MoM change in months of supply, percent |
+| `months_of_supply_yoy` | YoY change in months of supply, percent |
+| `percent_off_market_in_two_weeks` | Share of listings off the market within two weeks, percent |
+| `percent_off_market_in_two_weeks_mom_ppts` | MoM change, percentage points |
+| `percent_off_market_in_two_weeks_yoy_ppts` | YoY change, percentage points |
 
 ---
 
 ## 1b. Redfin: price_drops (unique columns)
 
+**Source:** [Redfin Data Center](https://www.redfin.com/news/data-center/)
+
 **Bronze tables:** `bronze_dev.redfin.price_drops_county`, `bronze_dev.redfin.price_drops_zipcode`, `bronze_dev.redfin.price_drops_neighborhood`
 **Silver tables:** `silver_dev.redfin.price_drops_county`, `silver_dev.redfin.price_drops_zipcode`, `silver_dev.redfin.price_drops_neighborhood`
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `PRICE DROPS` | `price_drops` | Cast to DoubleType |
-| `PRICE DROPS MOM (%)` | `price_drops_mom` | Cast to DoubleType |
-| `PRICE DROPS YOY (%)` | `price_drops_yoy` | Cast to DoubleType |
-| `AVERAGE SIZE OF PRICE DROP (%)` | `average_size_of_price_drop` | Cast to DoubleType |
-| `AVERAGE SIZE OF PRICE DROP MOM (PPTS)` | `average_size_of_price_drop_mom_ppts` | Divided by 100, cast to DoubleType |
-| `AVERAGE SIZE OF PRICE DROP YOY (PPTS)` | `average_size_of_price_drop_yoy_ppts` | Divided by 100, cast to DoubleType |
-| `PERCENT ACTIVE WITH PRICE DROPS (%)` | `percent_active_with_price_drops` | Cast to DoubleType |
-| `PERCENT ACTIVE WITH PRICE DROPS MOM (PPTS)` | `percent_active_with_price_drops_mom_ppts` | Divided by 100, cast to DoubleType |
-| `PERCENT ACTIVE WITH PRICE DROPS YOY (PPTS)` | `percent_active_with_price_drops_yoy_ppts` | Divided by 100, cast to DoubleType |
-| `HOMES SOLD WITH PRICE DROPS` | `homes_sold_with_price_drops` | Cast to DoubleType |
-| `HOMES SOLD WITH PRICE DROPS MOM (%)` | `homes_sold_with_price_drops_mom` | Cast to DoubleType |
-| `HOMES SOLD WITH PRICE DROPS YOY (%)` | `homes_sold_with_price_drops_yoy` | Cast to DoubleType |
+| Column | Description |
+| --- | --- |
+| `price_drops` | Number of active listings that had a price drop in the period |
+| `price_drops_mom` | MoM change in price drops, percent |
+| `price_drops_yoy` | YoY change in price drops, percent |
+| `average_size_of_price_drop` | Average size of a price drop, percent reduction |
+| `average_size_of_price_drop_mom_ppts` | MoM change, percentage points |
+| `average_size_of_price_drop_yoy_ppts` | YoY change, percentage points |
+| `percent_active_with_price_drops` | Share of active listings with a price drop, percent |
+| `percent_active_with_price_drops_mom_ppts` | MoM change, percentage points |
+| `percent_active_with_price_drops_yoy_ppts` | YoY change, percentage points |
+| `homes_sold_with_price_drops` | Homes sold after a price drop |
+| `homes_sold_with_price_drops_mom` | MoM change, percent |
+| `homes_sold_with_price_drops_yoy` | YoY change, percent |
 
 ---
 
 ## 1c. Redfin: delistings_relistings (unique columns)
 
+**Source:** [Redfin Data Center](https://www.redfin.com/news/data-center/)
+
 **Bronze tables:** `bronze_dev.redfin.delistings_relistings_county`, `bronze_dev.redfin.delistings_relistings_zipcode`, `bronze_dev.redfin.delistings_relistings_neighborhood`
 **Silver tables:** `silver_dev.redfin.delistings_relistings_county`, `silver_dev.redfin.delistings_relistings_zipcode`, `silver_dev.redfin.delistings_relistings_neighborhood`
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `TOTAL DELISTINGS` | `total_delistings` | Cast to DoubleType |
-| `TOTAL DELISTINGS MOM (%)` | `total_delistings_mom` | Cast to DoubleType |
-| `TOTAL DELISTINGS YOY (%)` | `total_delistings_yoy` | Cast to DoubleType |
-| `TOTAL RELISTINGS` | `total_relistings` | Cast to DoubleType |
-| `TOTAL RELISTINGS MOM (%)` | `total_relistings_mom` | Cast to DoubleType |
-| `TOTAL RELISTINGS YOY (%)` | `total_relistings_yoy` | Cast to DoubleType |
-| `SHARE OF LISTINGS DELISTED (%)` | `share_of_listings_delisted` | Cast to DoubleType |
-| `SHARE OF LISTINGS DELISTED MOM (PPTS)` | `share_of_listings_delisted_mom_ppts` | Divided by 100, cast to DoubleType |
-| `SHARE OF LISTINGS DELISTED YOY (PPTS)` | `share_of_listings_delisted_yoy_ppts` | Divided by 100, cast to DoubleType |
-| `SHARE OF LISTINGS RELISTED (%)` | `share_of_listings_relisted` | Cast to DoubleType |
-| `SHARE OF LISTINGS RELISTED MOM (PPTS)` | `share_of_listings_relisted_mom_ppts` | Divided by 100, cast to DoubleType |
-| `SHARE OF LISTINGS RELISTED YOY (PPTS)` | `share_of_listings_relisted_yoy_ppts` | Divided by 100, cast to DoubleType |
+| Column | Description |
+| --- | --- |
+| `total_delistings` | Listings removed from the market in the period |
+| `total_delistings_mom` | MoM change in delistings, percent |
+| `total_delistings_yoy` | YoY change in delistings, percent |
+| `total_relistings` | Previously delisted listings put back on the market |
+| `total_relistings_mom` | MoM change in relistings, percent |
+| `total_relistings_yoy` | YoY change in relistings, percent |
+| `share_of_listings_delisted` | Share of listings delisted, percent |
+| `share_of_listings_delisted_mom_ppts` | MoM change, percentage points |
+| `share_of_listings_delisted_yoy_ppts` | YoY change, percentage points |
+| `share_of_listings_relisted` | Share of listings relisted, percent |
+| `share_of_listings_relisted_mom_ppts` | MoM change, percentage points |
+| `share_of_listings_relisted_yoy_ppts` | YoY change, percentage points |
+
+---
+
+## 2. HUD: dim_states (reference dimension)
+
+**Source:** [HUD API](https://www.huduser.gov/hudapi/public/)
+
+**Bronze table:** `bronze_dev.hud.states`
+**Silver table:** `silver_dev.hud.dim_states`
+**Grain:** One row per state or territory
+
+Silver transformations: batch read from bronze (static reference data, not streamed); column names standardized to lowercase snake_case via `clean_columns_silver`; `_processed_timestamp` added.
+
+| Column | Description |
+| --- | --- |
+| `state_code` | 2-letter state/territory abbreviation; natural key |
+| `state_name` | State or territory name |
+| `_ingest_timestamp` | Time the bronze job ingested the row |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
+
+---
+
+## 3. HUD: dim_counties (reference dimension)
+
+**Source:** [HUD API](https://www.huduser.gov/hudapi/public/)
+
+**Bronze table:** `bronze_dev.hud.counties`
+**Silver table:** `silver_dev.hud.dim_counties`
+**Grain:** One row per county
+
+Silver transformations: batch read from bronze (static reference data, not streamed); column names standardized to lowercase snake_case via `clean_columns_silver`; `_processed_timestamp` added.
+
+| Column | Description |
+| --- | --- |
+| `fips_code` | 5-digit county FIPS code (2-digit state + 3-digit county); natural key |
+| `state_code` | 2-letter state code |
+| `county_name` | Short county name |
+| `cntyname` | Long-form county name as reported by HUD (e.g., "County, ST") |
+| `category` | County classification code from HUD reference data |
+| `town_name` | Town name associated with the county record |
+| `_ingest_timestamp` | Time the bronze job ingested the row |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
 
 ---
 
 ## 4. Opportunity Insights: social_capital_zip
+
+**Source:** [Opportunity Insights](https://opportunityinsights.org/data/)
 
 **Bronze table:** `bronze_dev.opportunity_insights.social_capital_zip`
 **Silver table:** `silver_dev.opportunity_insights.social_capital_zip`
@@ -162,39 +218,41 @@ The columns unique to each table type are listed in the subsections below.
 
 Silver transformations: columns renamed to descriptive names; `zip` and `county` cast to string (FIPS codes preserve leading zeros); numeric columns kept as-is; deduplicated by `zip_code`.
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `zip` | `zip_code` | Cast to string |
-| `county` | `county_fips_code` | Cast to string |
-| `num_below_p50` | `children_below_median_parental_income_count` | Renamed |
-| `pop2018` | `population_2018` | Renamed |
-| `ec_zip` | `economic_connectedness_low_ses` | Renamed |
-| `ec_se_zip` | `economic_connectedness_low_ses_standard_error` | Renamed |
-| `nbhd_ec_zip` | `neighborhood_economic_connectedness_low_ses` | Renamed |
-| `ec_grp_mem_zip` | `group_economic_connectedness_low_ses` | Renamed |
-| `ec_high_zip` | `economic_connectedness_high_ses` | Renamed |
-| `ec_high_se_zip` | `economic_connectedness_high_ses_standard_error` | Renamed |
-| `nbhd_ec_high_zip` | `neighborhood_economic_connectedness_high_ses` | Renamed |
-| `ec_grp_mem_high_zip` | `group_economic_connectedness_high_ses` | Renamed |
-| `exposure_grp_mem_zip` | `group_exposure_to_high_ses_low_ses` | Renamed |
-| `exposure_grp_mem_high_zip` | `group_exposure_to_high_ses_high_ses` | Renamed |
-| `nbhd_exposure_zip` | `neighborhood_exposure_to_high_ses` | Renamed |
-| `bias_grp_mem_zip` | `group_friending_bias_low_ses` | Renamed |
-| `bias_grp_mem_high_zip` | `group_friending_bias_high_ses` | Renamed |
-| `nbhd_bias_zip` | `neighborhood_friending_bias_low_ses` | Renamed |
-| `nbhd_bias_high_zip` | `neighborhood_friending_bias_high_ses` | Renamed |
-| `clustering_zip` | `friend_network_clustering` | Renamed |
-| `support_ratio_zip` | `within_zcta_friendship_support_ratio` | Renamed |
-| `volunteering_rate_zip` | `volunteering_group_membership_rate` | Renamed |
-| `civic_organizations_zip` | `civic_organizations_per_1000_users` | Renamed |
-| `_rescued_data` | `_rescued_data` | Auto Loader metadata, unchanged |
-| `_ingest_timestamp` | `_ingest_timestamp` | Metadata, unchanged |
-| `_source_file` | `_source_file` | Metadata, unchanged |
-| *(none)* | `_processed_timestamp` | **Silver only** — added via `F.current_timestamp()` |
+| Column | Description |
+| --- | --- |
+| `zip_code` | 5-digit ZIP code; string to preserve leading zeros |
+| `county_fips_code` | 5-digit county FIPS code; string |
+| `children_below_median_parental_income_count` | Children (1988 birth cohort) with below-median parental income in this ZIP |
+| `population_2018` | 2018 population estimate |
+| `economic_connectedness_low_ses` | Economic connectedness: share of high-SES friends for below-median-SES individuals |
+| `economic_connectedness_low_ses_standard_error` | Standard error of economic_connectedness_low_ses |
+| `neighborhood_economic_connectedness_low_ses` | Neighborhood-weighted economic connectedness, low-SES |
+| `group_economic_connectedness_low_ses` | Group-membership-based economic connectedness, low-SES |
+| `economic_connectedness_high_ses` | Economic connectedness: share of high-SES friends for above-median-SES individuals |
+| `economic_connectedness_high_ses_standard_error` | Standard error of economic_connectedness_high_ses |
+| `neighborhood_economic_connectedness_high_ses` | Neighborhood-weighted economic connectedness, high-SES |
+| `group_economic_connectedness_high_ses` | Group-membership-based economic connectedness, high-SES |
+| `group_exposure_to_high_ses_low_ses` | Exposure of low-SES individuals to high-SES peers via shared groups |
+| `group_exposure_to_high_ses_high_ses` | Exposure of high-SES individuals to high-SES peers via shared groups |
+| `neighborhood_exposure_to_high_ses` | Neighborhood-level exposure to high-SES individuals |
+| `group_friending_bias_low_ses` | Friending bias in groups, low-SES individuals |
+| `group_friending_bias_high_ses` | Friending bias in groups, high-SES individuals |
+| `neighborhood_friending_bias_low_ses` | Friending bias at neighborhood level, low-SES |
+| `neighborhood_friending_bias_high_ses` | Friending bias at neighborhood level, high-SES |
+| `friend_network_clustering` | Clustering of friendship networks within the ZIP |
+| `within_zcta_friendship_support_ratio` | Friendship support ratio among ZIP residents |
+| `volunteering_group_membership_rate` | Volunteering / group membership rate |
+| `civic_organizations_per_1000_users` | Civic organizations per 1,000 users |
+| `_rescued_data` | Auto Loader quarantine column holding values that failed to parse |
+| `_ingest_timestamp` | Time the bronze Auto Loader job ingested the raw file |
+| `_source_file` | Raw source file path in the bronze UC volume |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
 
 ---
 
 ## 5. Census Bureau: american_community_survey_zcta
+
+**Source:** [Census Bureau ACS](https://www.census.gov/programs-surveys/acs/technical-documentation.html)
 
 **Bronze table:** `bronze_dev.census_bureau.american_community_survey_zcta`
 **Silver table:** `silver_dev.census_bureau.american_community_survey_zcta`
@@ -202,25 +260,27 @@ Silver transformations: columns renamed to descriptive names; `zip` and `county`
 
 Silver transformations: Census variable codes renamed to descriptive names; `NAME` and `zip` cast to string (ZCTA codes preserve leading zeros); demographic variables cast to int or double.
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `NAME` | `zcta_name` | Cast to string, renamed |
-| `zip` | `zcta_code` | Cast to string, renamed |
-| `B01003_001E` | `total_population` | Cast to int, renamed |
-| `B01002_001E` | `median_age` | Cast to double, renamed |
-| `B19013_001E` | `median_household_income` | Cast to int, renamed |
-| `B17001_002E` | `population_below_poverty_level` | Cast to int, renamed |
-| `B02001_002E` | `white_alone_population` | Cast to int, renamed |
-| `B02001_003E` | `black_or_african_american_alone_population` | Cast to int, renamed |
-| `B02001_005E` | `asian_alone_population` | Cast to int, renamed |
-| `B03003_003E` | `hispanic_or_latino_population` | Cast to int, renamed |
-| `_ingest_timestamp` | `_ingest_timestamp` | Metadata, unchanged |
-| `_source_file` | `_source_file` | Metadata, unchanged |
-| *(none)* | `_processed_timestamp` | **Silver only** — added via `F.current_timestamp()` |
+| Column | Description |
+| --- | --- |
+| `zcta_name` | ZCTA display name |
+| `zcta_code` | 5-digit ZIP Code Tabulation Area code; string to preserve leading zeros |
+| `total_population` | Total population |
+| `median_age` | Median age, years |
+| `median_household_income` | Median household income, USD |
+| `population_below_poverty_level` | Population with income below poverty level |
+| `white_alone_population` | Population, White alone |
+| `black_or_african_american_alone_population` | Population, Black or African American alone |
+| `asian_alone_population` | Population, Asian alone |
+| `hispanic_or_latino_population` | Population, Hispanic or Latino (any race) |
+| `_ingest_timestamp` | Time the bronze Auto Loader job ingested the raw file |
+| `_source_file` | Raw source file path in the bronze UC volume |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
 
 ---
 
 ## 6. HUD: fair_market_rents_county
+
+**Source:** [HUD Fair Market Rents](https://www.huduser.gov/portal/datasets/fmr.html)
 
 **Bronze table:** `bronze_dev.hud.fair_market_rents_county`
 **Silver table:** `silver_dev.hud.fair_market_rents_county`
@@ -228,24 +288,24 @@ Silver transformations: Census variable codes renamed to descriptive names; `NAM
 
 Silver transformations: `year` cast from string to int; all other columns kept as-is; deduplicated by `county_name`, `zip_code`, `year`.
 
-| Bronze Column | Silver Column | Notes |
-| --- | --- | --- |
-| `county_name` | `county_name` | Unchanged |
-| `metro_name` | `metro_name` | Unchanged |
-| `area_name` | `area_name` | Unchanged |
-| `metro_status` | `metro_status` | Unchanged |
-| `smallarea_status` | `smallarea_status` | Unchanged |
-| `year` | `year` | Cast to int |
-| `zip_code` | `zip_code` | Unchanged |
-| `efficiency` | `efficiency` | Unchanged |
-| `one_bedroom` | `one_bedroom` | Unchanged |
-| `two_bedroom` | `two_bedroom` | Unchanged |
-| `three_bedroom` | `three_bedroom` | Unchanged |
-| `four_bedroom` | `four_bedroom` | Unchanged |
-| `source_url` | `source_url` | Unchanged |
-| `_ingest_timestamp` | `_ingest_timestamp` | Metadata, unchanged |
-| `_source_file` | `_source_file` | Metadata, unchanged |
-| *(none)* | `_processed_timestamp` | **Silver only** — added via `F.current_timestamp()` |
+| Column | Description |
+| --- | --- |
+| `county_name` | County name from HUD FMR data |
+| `metro_name` | Metro area name from HUD FMR data |
+| `area_name` | HUD FMR area name |
+| `metro_status` | 1 if the area is a metropolitan area, 0 otherwise |
+| `smallarea_status` | 1 if ZIP-level (small area) FMRs apply, 0 otherwise |
+| `year` | FMR program year |
+| `zip_code` | ZIP code the FMR applies to |
+| `efficiency` | Fair Market Rent for an efficiency (studio) unit, USD per month |
+| `one_bedroom` | Fair Market Rent for a one-bedroom unit, USD per month |
+| `two_bedroom` | Fair Market Rent for a two-bedroom unit, USD per month |
+| `three_bedroom` | Fair Market Rent for a three-bedroom unit, USD per month |
+| `four_bedroom` | Fair Market Rent for a four-bedroom unit, USD per month |
+| `source_url` | HUD API URL the row was fetched from |
+| `_ingest_timestamp` | Time the bronze Auto Loader job ingested the raw file |
+| `_source_file` | Raw source file path in the bronze UC volume |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
 
 ---
 
@@ -256,7 +316,7 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 **Pattern:** Batch reads (`spark.read.table()`) from silver → materialized views. Each gold fact table joins three Redfin silver tables at the same grain: `housing_market` (base) left-joined with `price_drops` and `delistings_relistings` on `region_name` + `period_begin` + `period_end`.
 
 **Gold transformations:**
-- Pipeline metadata columns dropped (`rescued_data`, `ingest_timestamp`, `source_file`, `_processed_timestamp`) — gold exposes only business-relevant columns.
+- Pipeline metadata columns dropped (`_rescued_data`, `_ingest_timestamp`, `_source_file`, `_processed_timestamp`) — gold exposes only business-relevant columns.
 - Common columns (`last_updated`, `frequency`, `region_type`, `metro`) retained from the base `housing_market` table only; enrichment tables skip these to avoid conflicts.
 - `gold_refresh_timestamp` added via `F.current_timestamp()` for freshness tracking.
 
@@ -285,7 +345,7 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 
 **Columns (from housing_market_county — base):**
 
-| Silver Column | Type | Notes |
+| Column | Type | Description |
 | --- | --- | --- |
 | `last_updated` | date | Redfin data freshness |
 | `frequency` | string | Reporting frequency |
@@ -340,7 +400,7 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 
 **Columns (from price_drops_county — left join):**
 
-| Silver Column | Type | Notes |
+| Column | Type | Description |
 | --- | --- | --- |
 | `price_drops` | double | Number of price drops |
 | `price_drops_mom` | double | MoM change |
@@ -357,7 +417,7 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 
 **Columns (from delistings_relistings_county — left join):**
 
-| Silver Column | Type | Notes |
+| Column | Type | Description |
 | --- | --- | --- |
 | `total_delistings` | double | Total delistings in period |
 | `total_delistings_mom` | double | MoM change |
@@ -374,7 +434,7 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 
 **Gold-added column:**
 
-| Gold Column | Type | Notes |
+| Column | Type | Description |
 | --- | --- | --- |
 | `gold_refresh_timestamp` | timestamp | Pipeline refresh time, added via `F.current_timestamp()` |
 

@@ -9,7 +9,7 @@ from pyspark.sql import DataFrame
 # PURPOSE:
 # - Read from silver tables (batch reads → materialized views)
 # - Join multiple silver sources at the same grain
-# - Drop pipeline metadata columns (rescued_data, ingest_timestamp, etc.)
+# - Drop pipeline metadata columns (_rescued_data, _ingest_timestamp, etc.)
 # - Add gold_refresh_timestamp for freshness tracking
 # - Expose only business-relevant columns
 #
@@ -21,7 +21,7 @@ from pyspark.sql import DataFrame
 # See docs/GOLD_PLAN.md for the full gold layer design.
 
 # Metadata columns to drop from silver tables (not needed in gold)
-METADATA_COLS = ["rescued_data", "ingest_timestamp", "source_file", "_processed_timestamp"]
+METADATA_COLS = ["_rescued_data", "_ingest_timestamp", "_source_file", "_processed_timestamp"]
 
 # Common columns shared across all Redfin silver tables at the same grain.
 # These come from the base (housing_market) table; joined tables skip them

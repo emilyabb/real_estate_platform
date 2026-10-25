@@ -55,7 +55,7 @@ OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG = {
     # "schema_name":"opportunity_insights",
     "natural_key": ["zip"],
     "bronze_key": ["zip", "_ingest_timestamp"],
-    "silver_key": ["zip_code", "_ingest_timestamp"],
+    "silver_key": ["zip_code"],
     "csv_directory":"/Volumes/bronze_dev/opportunity_insights/opportunity_insights_raw/social_capital_zip"
 }
 

@@ -26,10 +26,9 @@ Column counts validated against live schemas (Oct 2026):
          neighborhood_market_activity       75 columns each
 
 Notes:
-  - Redfin silver metadata columns are named WITHOUT leading underscores
-    (ingest_timestamp, source_file, rescued_data); the other silver tables
-    keep the bronze underscores (_ingest_timestamp, _source_file,
-    _rescued_data). The map uses the live names for each table.
+  - All silver metadata columns use leading underscores (_ingest_timestamp,
+    _source_file, _rescued_data), consistent with the bronze layer and
+    Databricks Auto Loader convention.
   - price_drops and delistings_relistings silver tables have NO region_id.
   - COMMENT ON COLUMN has been verified to work on SDP streaming tables
     (tested on silver_dev.redfin.housing_market_county.region_name).
@@ -61,22 +60,22 @@ REDFIN_REGION_ID = {
 }
 
 # ---------------------------------------------------------------------
-# Redfin: pipeline metadata columns (silver names — note: no underscore
-# on the first three, unlike the other silver sources)
+# Redfin: pipeline metadata columns (silver names match bronze — leading
+# underscore preserved)
 # ---------------------------------------------------------------------
 
 REDFIN_METADATA_COLUMNS = {
-    "rescued_data": (
+    "_rescued_data": (
         "Auto Loader quarantine column holding values that failed to parse against "
-        "the schema. Bronze source: '_rescued_data' (underscore dropped in silver)."
+        "the schema. Bronze source: '_rescued_data'."
     ),
-    "ingest_timestamp": (
+    "_ingest_timestamp": (
         "Time the bronze Auto Loader job ingested the raw file. "
-        "Bronze source: '_ingest_timestamp' (underscore dropped in silver)."
+        "Bronze source: '_ingest_timestamp'."
     ),
-    "source_file": (
+    "_source_file": (
         "Raw source file path in the bronze UC volume. "
-        "Bronze source: '_source_file' (underscore dropped in silver)."
+        "Bronze source: '_source_file'."
     ),
     "_processed_timestamp": (
         "Silver pipeline processing time; added in silver via current_timestamp() "
@@ -342,14 +341,13 @@ HUD_FMR_COLUMNS = {
 }
 
 # ---------------------------------------------------------------------
-# HUD: reference dimensions (not in docs/DATA_DICTIONARY.md — documented
-# here from live schemas)
+# HUD: reference dimensions (documented in docs/DATA_DICTIONARY.md §2/§3)
 # ---------------------------------------------------------------------
 
 HUD_DIM_STATES_COLUMNS = {
     "state_code": "2-letter state/territory abbreviation; natural key. Source: HUD listStates API via bronze_dev.hud.states.",
     "state_name": "State or territory name.",
-    "ingest_timestamp": "Time the bronze job ingested the row.",
+    "_ingest_timestamp": "Time the bronze job ingested the row. Bronze source: '_ingest_timestamp'.",
     "_processed_timestamp": "Silver pipeline processing time; added in silver via current_timestamp().",
 }
 
@@ -360,7 +358,7 @@ HUD_DIM_COUNTIES_COLUMNS = {
     "cntyname": "Long-form county name as reported by HUD ('County, ST').",
     "category": "County classification code from HUD reference data.",
     "town_name": "Town name associated with the county record.",
-    "ingest_timestamp": "Time the bronze job ingested the row.",
+    "_ingest_timestamp": "Time the bronze job ingested the row. Bronze source: '_ingest_timestamp'.",
     "_processed_timestamp": "Silver pipeline processing time; added in silver via current_timestamp().",
 }
 
@@ -371,7 +369,7 @@ HUD_DIM_COUNTIES_COLUMNS = {
 GOLD_REFRESH_COLUMNS = {
     "gold_refresh_timestamp": (
         "Gold materialized view refresh time, added via current_timestamp() at build. "
-        "Pipeline metadata columns (rescued_data, ingest_timestamp, source_file, "
+        "Pipeline metadata columns (_rescued_data, _ingest_timestamp, _source_file, "
         "_processed_timestamp) are dropped in gold."
     ),
 }
