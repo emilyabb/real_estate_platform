@@ -125,6 +125,12 @@ def create_silver_redfin_table(t):
         # Cast columns to appropriate types (Redfin-specific logic)
         df = cast_redfin_columns(df)
 
+        # For ZIP-code grain tables, cast region_name to string and left-pad to 5 digits.
+        # Bronze stores REGION NAME as INT (e.g. 2557), but ZIP codes need leading
+        # zeros preserved (e.g. "02557") for correct joins and lookups.
+        if t.get("redfin_grain") == "zips":
+            df = df.withColumn("region_name", F.lpad(F.col("region_name").cast("string"), 5, "0"))
+
         # Add processing timestamp
         df = df.withColumn("_processed_timestamp", F.current_timestamp())
         

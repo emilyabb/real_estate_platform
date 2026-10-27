@@ -37,14 +37,6 @@ REDFIN_TABLES = [
     for d in DIRECTORIES
     for g, s in GRAINS.items()
 ]
-# For pipeline testing, remove large tables
-# REDFIN_TABLES = [
-#     t for t in REDFIN_TABLES
-#     if t["table_name"] not in [
-#         "housing_market_zipcode",
-#         "housing_market_neighborhood",
-#     ]
-# ]
 
 
 # -------------------------------------------------------------------

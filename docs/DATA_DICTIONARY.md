@@ -27,12 +27,14 @@ Column-level reference for every silver and gold table in the real estate platfo
 **Source:** [Redfin Data Center](https://www.redfin.com/news/data-center/)
 
 **Bronze tables:** `bronze_dev.redfin.{housing_market,price_drops,delistings_relistings}_{county,zipcode,neighborhood}`
+
 **Silver tables:** `silver_dev.redfin.{housing_market,price_drops,delistings_relistings}_{county,zipcode,neighborhood}`
+
 **Grain:** One row per region (county / ZIP code / neighborhood) per time period (`period_begin` × `period_end`)
 
-The `region_type` column discriminates grains (`'County'`, `'Zip'`, `'Neighborhood'`). The `region_name` column is `STRING` for county and neighborhood tables, `INT` for the zipcode table.
+The `region_type` column discriminates grains (`'County'`, `'Zip'`, `'Neighborhood'`). The `region_name` column is `STRING` for all tables. For county and neighborhood tables it holds the region name as-is; for the zipcode tables it is cast from bronze `INT` to string and left-padded with zeros to 5 digits (e.g. `2557` → `"02557"`) to preserve leading zeros in ZIP codes.
 
-Silver transformations: column names standardized to lowercase snake_case; `"NA"` strings replaced with null; date columns cast to DateType; PPTS columns divided by 100; all other non-string columns cast to DoubleType.
+Silver transformations: column names standardized to lowercase snake_case; `"NA"` strings replaced with null; date columns cast to DateType; PPTS columns divided by 100; all other non-string columns cast to DoubleType; for ZIP-grain tables, `region_name` cast to string and left-padded to 5 digits.
 
 The following columns are common to all nine Redfin tables (three table types × three grains):
 
