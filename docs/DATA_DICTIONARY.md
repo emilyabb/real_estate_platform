@@ -13,16 +13,17 @@ Column-level reference for every silver and gold table in the real estate platfo
 2. [HUD: dim_states (reference dimension)](#2-hud-dim_states-reference-dimension)
 3. [HUD: dim_counties (reference dimension)](#3-hud-dim_counties-reference-dimension)
 4. [Opportunity Insights: social_capital_zip](#4-opportunity-insights-social_capital_zip)
-5. [Census Bureau: american_community_survey_zcta](#5-census-bureau-american_community_survey_zcta)
-6. [HUD: fair_market_rents_county](#6-hud-fair_market_rents_county)
+5. [Census Bureau: american_community_survey (zcta, county, state)](#5-census-bureau-american_community_survey-zcta-county-state)
+6. [HUD: fair_market_rents (county, MSA, ZIP)](#6-hud-fair_market_rents-county-msa-zip)
 7. [Gold Layer: Fact Tables](#7-gold-layer-fact-tables)
     - [7a. county_housing_profile](#7a-county_housing_profile)
     - [7b. zip_market_health](#7b-zip_market_health)
     - [7c. neighborhood_market_activity](#7c-neighborhood_market_activity)
+8. [USPS ZIP Codes: usps_zip_codes (reference dimension)](#8-usps-zip-codes-usps_zip_codes-reference-dimension)
 
 ---
 
-## 1. Redfin: common columns (all nine tables)
+## 1. Redfin: common columns 
 
 **Source:** [Redfin Data Center](https://www.redfin.com/news/data-center/)
 
@@ -34,7 +35,7 @@ Column-level reference for every silver and gold table in the real estate platfo
 
 The `region_type` column discriminates grains (`'County'`, `'Zip'`, `'Neighborhood'`). The `region_name` column is `STRING` for all tables. For county and neighborhood tables it holds the region name as-is; for the zipcode tables it is cast from bronze `INT` to string and left-padded with zeros to 5 digits (e.g. `2557` → `"02557"`) to preserve leading zeros in ZIP codes.
 
-Silver transformations: column names standardized to lowercase snake_case; `"NA"` strings replaced with null; date columns cast to DateType; PPTS columns divided by 100; all other non-string columns cast to DoubleType; for ZIP-grain tables, `region_name` cast to string and left-padded to 5 digits.
+Silver transformations: column names standardized to lowercase snake_case; `"NA"` strings replaced with null; date columns cast to DateType; percent (`_perc`) and PPTS columns divided by 100; all other non-string columns cast to DoubleType; for ZIP-grain tables, `region_name` cast to string and left-padded to 5 digits.
 
 The following columns are common to all nine Redfin tables (three table types × three grains):
 
@@ -173,7 +174,9 @@ The columns unique to each table type are listed in the subsections below.
 **Source:** [HUD API](https://www.huduser.gov/hudapi/public/)
 
 **Bronze table:** `bronze_dev.hud.states`
+
 **Silver table:** `silver_dev.hud.dim_states`
+
 **Grain:** One row per state or territory
 
 Silver transformations: batch read from bronze (static reference data, not streamed); column names standardized to lowercase snake_case via `clean_columns_silver`; `_processed_timestamp` added.
@@ -215,7 +218,9 @@ Silver transformations: batch read from bronze (static reference data, not strea
 **Source:** [Opportunity Insights](https://opportunityinsights.org/data/)
 
 **Bronze table:** `bronze_dev.opportunity_insights.social_capital_zip`
+
 **Silver table:** `silver_dev.opportunity_insights.social_capital_zip`
+
 **Grain:** One row per ZIP code
 
 Silver transformations: columns renamed to descriptive names; `zip` and `county` cast to string (FIPS codes preserve leading zeros); numeric columns kept as-is; deduplicated by `zip_code`.
@@ -252,15 +257,21 @@ Silver transformations: columns renamed to descriptive names; `zip` and `county`
 
 ---
 
-## 5. Census Bureau: american_community_survey_zcta
+## 5. Census Bureau: american_community_survey (zcta, county, state)
 
 **Source:** [Census Bureau ACS](https://www.census.gov/programs-surveys/acs/technical-documentation.html)
 
-**Bronze table:** `bronze_dev.census_bureau.american_community_survey_zcta`
-**Silver table:** `silver_dev.census_bureau.american_community_survey_zcta`
-**Grain:** One row per ZCTA (ZIP Code Tabulation Area)
+**Bronze tables:** `bronze_dev.census_bureau.american_community_survey_zcta`, `bronze_dev.census_bureau.american_community_survey_county`, `bronze_dev.census_bureau.american_community_survey_state`
 
-Silver transformations: Census variable codes renamed to descriptive names; `NAME` and `zip` cast to string (ZCTA codes preserve leading zeros); demographic variables cast to int or double.
+**Silver tables:** `silver_dev.census_bureau.american_community_survey_zcta`, `silver_dev.census_bureau.american_community_survey_county`, `silver_dev.census_bureau.american_community_survey_state`
+
+Ingestion covers three geographic grains (ZCTA, county, state) via the `grain` parameter on `fetch_census_bureau_acs` in `src/ingestion/others.ipynb`. Raw files for all three grains land in one shared volume directory as `american_community_survey_{grain}_{timestamp}.json`; because the raw JSON column layout differs per grain, each bronze table filters the shared directory to its own grain's files. Legacy files named `american_community_survey_{timestamp}.json` (and older misnamed `social_capital_zip_{timestamp}.json`) continue to be ingested by the zcta bronze table.
+
+Silver transformations: Census variable codes renamed to descriptive names; FIPS/geography code columns cast to string (leading zeros preserved); demographic variables cast to int or double; deduplicated per grain via `replace_using` keyed on the grain's silver key.
+
+### 5a. ZCTA grain
+
+**Grain:** One row per ZCTA (ZIP Code Tabulation Area). **Dedup key:** `zcta_code`
 
 | Column | Description |
 | --- | --- |
@@ -278,27 +289,72 @@ Silver transformations: Census variable codes renamed to descriptive names; `NAM
 | `_source_file` | Raw source file path in the bronze UC volume |
 | `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
 
+### 5b. County grain
+
+**Grain:** One row per county. **Dedup key:** `state_fips` + `county_fips` (silver renames bronze `state`/`county` to `state_fips`/`county_fips`)
+
+| Column | Description |
+| --- | --- |
+| `county_name` | County display name from the Census `NAME` field |
+| `state_fips` | 2-digit state FIPS code; string to preserve leading zeros |
+| `county_fips` | 3-digit county FIPS code; string |
+| `total_population` | Total population |
+| `median_age` | Median age, years |
+| `median_household_income` | Median household income, USD |
+| `population_below_poverty_level` | Population with income below poverty level |
+| `white_alone_population` | Population, White alone |
+| `black_or_african_american_alone_population` | Population, Black or African American alone |
+| `asian_alone_population` | Population, Asian alone |
+| `hispanic_or_latino_population` | Population, Hispanic or Latino (any race) |
+| `_ingest_timestamp` | Time the bronze Auto Loader job ingested the raw file |
+| `_source_file` | Raw source file path in the bronze UC volume |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
+
+### 5c. State grain
+
+**Grain:** One row per state. **Dedup key:** `state_fips` (silver renames bronze `state` to `state_fips`)
+
+| Column | Description |
+| --- | --- |
+| `state_name` | State display name from the Census `NAME` field |
+| `state_fips` | 2-digit state FIPS code; string to preserve leading zeros |
+| `total_population` | Total population |
+| `median_age` | Median age, years |
+| `median_household_income` | Median household income, USD |
+| `population_below_poverty_level` | Population with income below poverty level |
+| `white_alone_population` | Population, White alone |
+| `black_or_african_american_alone_population` | Population, Black or African American alone |
+| `asian_alone_population` | Population, Asian alone |
+| `hispanic_or_latino_population` | Population, Hispanic or Latino (any race) |
+| `_ingest_timestamp` | Time the bronze Auto Loader job ingested the raw file |
+| `_source_file` | Raw source file path in the bronze UC volume |
+| `_processed_timestamp` | Silver pipeline processing time; added via `current_timestamp()` |
+
 ---
 
-## 6. HUD: fair_market_rents_county
+## 6. HUD: fair_market_rents (county, MSA, ZIP)
 
 **Source:** [HUD Fair Market Rents](https://www.huduser.gov/portal/datasets/fmr.html)
 
-**Bronze table:** `bronze_dev.hud.fair_market_rents_county`
-**Silver table:** `silver_dev.hud.fair_market_rents_county`
-**Grain:** One row per county × ZIP code × year
+**Bronze table:** `bronze_dev.hud.fair_market_rents` (geography-neutral - the raw data holds county-, MSA-, and ZIP-level rows in one file)
 
-Silver transformations: `year` cast from string to int; all other columns kept as-is; deduplicated by `county_name`, `zip_code`, `year`.
+**Silver tables:** `silver_dev.hud.fair_market_rents_county`, `silver_dev.hud.fair_market_rents_msa`, `silver_dev.hud.fair_market_rents_zipcode`
+
+**Grain:** Bronze: one row per county × ZIP code × year (natural key `county_name`, `zip_code`, `year`). Each silver table holds one geographic level: county = one row per county × year, MSA = one row per metro area × year, ZIP = one row per ZIP code × year.
+
+**Level discriminator (`metro_status`):** county rows have `zip_code IS NULL` and `metro_status = 0`; MSA rows have `zip_code = 'MSA level'`, or `zip_code IS NULL` with `metro_status = 1` (metro counties - `area_name` is the MSA); ZIP rows have a real ZIP code in `zip_code`. County-level and metro-county rows can carry a null year. MSA dedup on `metro_name` + `year` collapses identical metro rows contributed by multiple counties (e.g. Bibb/Blount to one Birmingham row).
+
+Silver transformations: rows filtered to the table's geographic level; `year` cast from string to int; all other columns kept as-is; deduplicated by the level's key - county: `county_name` + `year`; MSA: `metro_name` + `year`; ZIP: `zip_code` + `year`.
 
 | Column | Description |
 | --- | --- |
 | `county_name` | County name from HUD FMR data |
 | `metro_name` | Metro area name from HUD FMR data |
 | `area_name` | HUD FMR area name |
-| `metro_status` | 1 if the area is a metropolitan area, 0 otherwise |
+| `metro_status` | Level discriminator: 1 if the county's FMR area is a metro/MSA area, 0 if the FMR area is the county itself |
 | `smallarea_status` | 1 if ZIP-level (small area) FMRs apply, 0 otherwise |
-| `year` | FMR program year |
-| `zip_code` | ZIP code the FMR applies to |
+| `year` | FMR program year (cast from string to int in silver) |
+| `zip_code` | ZIP code the FMR applies to; `'MSA level'` marker or null on non-ZIP rows |
 | `efficiency` | Fair Market Rent for an efficiency (studio) unit, USD per month |
 | `one_bedroom` | Fair Market Rent for a one-bedroom unit, USD per month |
 | `two_bedroom` | Fair Market Rent for a two-bedroom unit, USD per month |
@@ -479,3 +535,35 @@ Silver transformations: `year` cast from string to int; all other columns kept a
 | `silver_dev.redfin.delistings_relistings_neighborhood` | left join | Delisting/relisting activity |
 
 **Columns:** Same structure as `county_housing_profile` (§7a) — all housing market, price drop, and delisting/relisting columns from the three Redfin neighborhood silver tables, plus `gold_refresh_timestamp`.
+
+---
+
+## 8. USPS ZIP Codes: usps_zip_codes (reference dimension)
+
+**Source:** [USPS ZIP Codes reference database](https://raw.githubusercontent.com/seanpianka/zipcodes/refs/heads/master/scripts/data/zip_code_database.csv) (seanpianka/zipcodes on GitHub, derived from USPS data)
+
+**Bronze table:** `bronze_dev.geo_re.usps_zip_codes`
+
+**Grain:** One row per ZIP code (~42,700 rows). The platform's ZIP code reference dimension — the source for `geo_re.dim_zipcode` (see `_temp_utilities/GOLD_PLAN.md` §1c). Silver `silver_dev.geo_re.dim_zipcode` and gold `geo_re.dim_zipcode` are pending.
+
+Bronze transformations: batch CSV read in the bronze pipeline (static reference data, not streamed).
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `zip` | int | 5-digit USPS ZIP code. Stored as INT in bronze, so leading zeros are dropped (e.g. 00501 → 501) — cast to string and zero-pad to 5 digits before joining on ZIP codes |
+| `type` | string | ZIP code type (e.g. STANDARD, PO BOX, UNIQUE) |
+| `decommissioned` | int | 1 if the ZIP code is decommissioned |
+| `primary_city` | string | Primary city for the ZIP code |
+| `acceptable_cities` | string | Additional acceptable city names for the ZIP, when present |
+| `unacceptable_cities` | string | City names not acceptable for this ZIP, when present |
+| `state` | string | 2-letter state/territory code |
+| `county` | string | County name string (e.g. "Suffolk County") — not a FIPS code |
+| `timezone` | string | Timezone name (e.g. America/New_York) |
+| `area_codes` | string | Telephone area codes for the ZIP |
+| `world_region` | string | World region (NA) |
+| `country` | string | Country (US) |
+| `latitude` | double | ZIP centroid latitude |
+| `longitude` | double | ZIP centroid longitude |
+| `irs_estimated_population` | int | IRS-estimated population for the ZIP |
+| `_ingest_timestamp` | timestamp | Time the bronze job ingested the row |
+| `_source_file` | string | Raw source file path in the bronze UC volume |

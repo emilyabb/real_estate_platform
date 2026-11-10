@@ -1,3 +1,4 @@
+%md
 # Talk Track: Architecture, Decisions, and Issues
 
 > Narrative reference for explaining the real estate platform's design, key roadblocks, and the reasoning behind major decisions. Useful for onboarding, demos, and stakeholder conversations.
@@ -14,7 +15,7 @@ The platform uses **Lakeflow Spark Declarative Pipelines** (SDP, formerly DLT / 
 | --- | --- |
 | **Declarative table definitions** | You define *what* each table should look like (columns, cleaning, dedup) via `@dp.table()`, not *how* to orchestrate the steps. SDP figures out the DAG, dependencies, and execution order. |
 | **Streaming + batch in one pipeline** | Data for fact tables lands continuously via Auto Loader (streaming), while HUD reference data is static (batch). Both coexist in the same pipeline file — no separate streaming vs. batch infrastructure. |
-| **Built-in data quality** | `@dp.expect_or_dropis used to drop bad rows at ingest time. No separate validation step. |
+| **Built-in data quality** | `@dp.expect_or_drop` is used to drop bad rows at ingest time. No separate validation step. |
 | **Declarative dedup** | `replace_using` + `sequence_by` on the table decorator gives MERGE semantics — "keep the latest row per key" — without writing window functions or manual MERGE statements. |
 | **Auto-optimization** | `pipelines.autoOptimize.zOrderCols` in table properties handles Z-ordering automatically. No separate `OPTIMIZE` jobs. |
 | **Serverless compute** | No cluster to manage. The pipeline runs on serverless, scales automatically, and we pay only for what we use. |
@@ -23,7 +24,7 @@ The platform uses **Lakeflow Spark Declarative Pipelines** (SDP, formerly DLT / 
 
 - **Runtime version constraints:** `replace_using` / `sequence_by` requires DBR 18.2+. The workspace was on a pre-18.2 runtime when we first ran the pipeline, causing a `TypeError`. (See Issue #1 below.)
 - **No arbitrary Spark in streaming tables:** Window functions like `row_number()` don't work in streaming queries. Dedup must be declarative (`replace_using`) or deferred to batch reads. (See Issue #2.)
-- **Pipeline libraries are explicit:** The `spark-pipeline.yml` glob (`src/pipelines/*.py`) is a DAB config that is NOT applied to the actual pipeline. New files must be manually added. (See Issue #7.)
+- **Pipeline libraries are explicit:** The `spark-pipeline.yml` glob (`src/pipelines/*.py`) is a DAB config that is NOT applied to the actual pipeline. New files must be manually added. (See Issue #6.)
 
 ### API evolution: `dlt` → `pyspark.pipelines`
 
@@ -33,7 +34,7 @@ The bronze pipeline uses the older `import dlt` API. The silver and gold pipelin
 
 ## 2. Ingestion Is Separate from the Pipeline
 
-Data ingestion (fetching from external sources) and data transformation (cleaning, dedup, joins) are **deliberately separated** into different code paths:
+Data ingestion (fetching from external sources) and data transformation (cleaning, dedup, joins) are deliberately separated into different code paths:
 
 ```
 src/ingestion/          ← Standalone notebooks: fetch from API/download, save raw files to UC volumes
@@ -68,9 +69,9 @@ External source (API / download)
     ↓
 src/ingestion/<notebook>           ← fetch + save raw file
     ↓
-/Volumes/bronze_dev/<schema>/...  ← raw files in UC volume
+/Volumes/bronze_dev/<schema>/...   ← raw files in UC volume
     ↓
-Bronze pipeline (Auto Loader)    ← watches volume, streams new files into bronze table
+Bronze pipeline (Auto Loader)     ← watches volume, streams new files into bronze table
     ↓
 Silver pipeline                   ← reads bronze, cleans/dedups/types
     ↓
@@ -79,9 +80,9 @@ Gold pipeline                     ← joins multiple silver sources, drops metad
 
 ---
 
-## 3. How Dimension Tables Are Set Up Differently
+## 3. Fact vs. Dimension Tables: Role Drives the Implementation
 
-Not all tables in the pipeline are created equal. Fact tables and dimension tables use fundamentally different patterns within the same SDP pipeline.
+What makes a table a fact or a dimension is its **role**, not its read pattern. Facts capture events/measurements at a grain — rows accumulate over time, and the same key can arrive repeatedly, so they need dedup keyed on grain + uniqueness. Dimensions are static reference data with naturally unique keys, replaced wholesale rather than appended to. Streaming vs. batch is an implementation choice that *follows* from that role: accumulating fact data is processed incrementally (streaming), static reference data is simply re-read (batch).
 
 ### Fact tables: streaming with dedup
 
@@ -179,9 +180,41 @@ Separate catalogs make access control simple — dashboards and apps only need `
 
 ---
 
-## 5. Issues Encountered
+## 5. Redfin Grain Tables: Kept Separate, Not Stacked
 
-> Moved from `SESSION_NOTES.md`. These are the roadblocks hit during development, with context on why they happened and how they were resolved (or remain open).
+The Redfin silver layer has 9 tables — three grains (county, ZIP, neighborhood) × three data types (housing_market, price_drops, delistings_relistings). Within each data type, the schemas are identical across grains (same column names, same types) with one exception: `region_name` is `STRING` for county/neighborhood but `INT` for zipcode. Since the `region_type` column already discriminates cleanly (`'County'`, `'Zip'`, `'Neighborhood'`), the question came up: why not "stack" the three grain tables into one per data type (3 tables instead of 9) using `UNION ALL` + `CAST(region_name AS STRING)` for the zipcode tables?
+
+### Decision: keep separate grain tables — do not stack
+
+The gold tables are enrichment tables, and the enrichment strategy differs fundamentally by grain:
+
+| Grain | External enrichment | Join complexity |
+| --- | --- | --- |
+| County | HUD FMR (aggregate ZIPs → county), ACS (aggregate ZCTAs → county), dim_county | High — needs crosswalks + aggregation |
+| ZIP | social_capital_zip, ACS (direct), HUD FMR (direct) | Medium — direct joins |
+| Neighborhood | None available | Low — Redfin only |
+
+Stacking these into one gold table would mean either carrying a forest of NULLs for grain-specific enrichments or stripping enrichment down to the common denominator (losing the gold layer's value-add). The `region_name` column also becomes polymorphic — a county name, a ZIP integer, or a neighborhood name — so downstream joins need conditional logic keyed on `region_type`, which is fragile.
+
+### Tradeoffs
+
+| | Separate grain tables (chosen) | Stacked tables (rejected) |
+| --- | --- | --- |
+| **Pipeline code** | Triplicated join logic across 3 grains (mitigated with a shared factory function) | Write join logic once, filter by `region_type` |
+| **Gold enrichment** | Each table carries only its grain's enrichment — no NULLs, clear semantics | Must handle all enrichment strategies in one table or drop grain-specific enrichment |
+| **Downstream joins** | Each table joins to its dimension tables on a single, clear key | Joins must branch on `region_type` — polymorphic `region_name` key |
+| **Partition pruning** | Each query naturally scans only its grain | Stacked table includes all grains; partitioning on `region_type` adds overhead |
+| **Table count** | 3 gold tables (one per grain) | 1–3 stacked tables (one per data type, or a single wide table) |
+
+### Implementation
+
+The Redfin join logic (housing_market + price_drops + delistings_relistings at the same grain) is identical across the three grains. To avoid triplication, the gold pipeline uses the shared factory function `_create_redfin_gold_table(grain, table_name, comment)` — each gold table is one call with the grain as a parameter, instead of the same join logic written three times.
+
+---
+
+## 6. Issues Encountered
+
+These are the roadblocks hit during development, with context on why they happened and how they were resolved.
 
 ### Issue 1: `replace_using` / `sequence_by` not supported on this runtime
 
@@ -202,7 +235,7 @@ The `replace_using` and `sequence_by` parameters on `@dp.table()` require **Data
 | Option | What it involves | Works now? |
 | --- | --- | --- |
 | **Upgrade DBR to 18.2+** | Change the pipeline's DBR — existing code works as-is | After upgrade |
-| **Use `dp.create_auto_cdc_flow()`** | Available on this runtime — has `keys` + `sequence_by`. Requires CDF enabled on bronze source tables | Yes, if CDF is enabled |
+| **Use `dp.create_auto_cdc_flow()`** | Available on < 18.2 runtime — has `keys` + `sequence_by`. Requires CDF enabled on bronze source tables | Yes, if CDF is enabled |
 | **Skip dedup in silver** | Append all rows in silver, dedup at query time or in gold with batch read + window function | Yes |
 
 **Status:** The pipeline now runs successfully (DBR was upgraded or the runtime caught up). `replace_using` + `sequence_by` work as expected.
@@ -254,26 +287,76 @@ Setting up local development with Databricks Connect + VS Code + serverless comp
 
 ---
 
-### Issue 5: Incomplete refactor in `transformations/bronze.py`
-
-The file `src/pipelines/transformations/bronze.py` contains an in-progress refactor with commented-out code and imports referencing modules that don't exist in the current project structure (`src.config.sources.redfin`, `src.ingestion.read_table`, `src.bronze.prep`). The active bronze pipeline (`src/pipelines/real_estate_pipeline_bronze.py`) uses the older `dlt` module directly and works — the refactor appears abandoned or paused.
-
----
-
-### Issue 6: Large Redfin tables excluded from pipeline for testing
-
-Two of the nine Redfin tables — `housing_market_zipcode` and `housing_market_neighborhood` — were initially filtered out in `sources_ref.py` to keep pipeline runs fast during development. These have since been re-enabled and are now part of the gold layer (`zip_market_health` and `neighborhood_market_activity`).
-
----
-
-### Issue 7: Bronze layer lacks column cleaning
+### Issue 5: Bronze layer lacks column cleaning
 
 The bronze pipeline (`real_estate_pipeline_bronze.py`) loads raw data via Auto Loader without any column name cleaning — original CSV headers with spaces, special characters, and mixed case are preserved as-is. All cleaning happens in silver. This means bronze table columns have names like `"MEDIAN SALE PRICE ($)"` and `"PRICE DROPS YoY (%)"`, which require backtick-quoted SQL queries.
 
 ---
 
-### Issue 8: Pipeline libraries use explicit file paths, not glob pattern
+### Issue 6: Pipeline libraries use explicit file paths, not glob pattern
 
 The pipeline `real_estate_pipeline_new` is configured with **explicit file paths** in its `libraries` setting — `real_estate_pipeline_bronze.py`, `real_estate_pipeline_silver.py`, and `real_estate_pipeline_gold.py` are each listed individually. The glob pattern (`src/pipelines/*.py`) in `spark-pipeline.yml` is a DAB config that is **not** applied to the actual pipeline at runtime. New pipeline files must be **manually added** to the pipeline libraries via `editPipelineSettings` or the pipeline UI, otherwise the pipeline update will succeed but the new tables won't be created.
 
 ---
+
+### Issue 7: Incomplete null checks on composite key columns
+
+An external review recommended adding `expect_or_fail` checks on every component of each silver table's composite key, pointing out that HUD FMR checked `zip_code` and `year` but not `county_name`.
+
+**Why the gap mattered:** the keys drive `replace_using` dedup — a row with a null key component won't match anything in the MERGE and can seed duplicate/ambiguous rows in silver (and propagate into gold joins).
+
+**What was actually wrong (broader than the review said):**
+
+- HUD FMR: `county_name` null check missing (the review's example — correct)
+- Redfin: `region_name` (third key column) unchecked; `period_begin`/`period_end` were already implicitly covered because a NULL comparison fails `valid_period`
+- ACS: **no expectations at all**, and also missing `replace_using`/`sequence_by` despite `silver_key` existing in its config — so no dedup either
+- Opportunity Insights: already fully covered (single-column key `zip_code`)
+
+**Why `expect_or_drop`, not `expect_or_fail`:** `expect_or_fail` fails the flow for the affected table — and any downstream flows that depend on it, such as gold tables reading that silver table. Independent parallel flows in the same update are *not* affected, but the failed flow blocks its part of the update until the offending row is dealt with. Since a row with a null key is unusable anyway, dropping it is the proportionate response: `expect_or_drop` removes just that row and records the drop in the pipeline event log, so drop-rate spikes can be alerted on. `expect_or_fail` is reserved for a true fail-fast data contract — where bad data should stop the flow, not just one row — if one is ever needed.
+
+**Resolution:** Added `expect_or_drop` null checks for `region_name` (Redfin), `county_name` (HUD FMR), and `zcta_code` (ACS), and added `replace_using` (`zcta_code`) + `sequence_by` (`_ingest_timestamp`) to ACS so it dedups like the other silver facts.
+
+---
+
+## 7. Visualization: Databricks App (Node.js + Bootstrap)
+
+The interactive visualization website is a **Databricks App** — a lightweight web app hosted in the Databricks environment, built with **Node.js** and **Bootstrap**, and developed with **Codex** (AI coding agent).
+
+### Decision: custom micro-app instead of an out-of-the-box BI tool
+
+| Concern | Custom Databricks App (chosen) | Out-of-the-box BI (Power BI / Tableau) (rejected) |
+| --- | --- | --- |
+| **Flexibility** | Full control over UI, interactions, and custom visualization behavior | Constrained to the tool's chart types, layouts, and extension model |
+| **Speed of development** | Fast iteration, accelerated by AI-assisted development (Codex) | Quick start for standard dashboards, but custom behavior needs workarounds |
+| **Databricks integration** | Native — runs where the data lives, reads gold tables directly, no extra connector or gateway | External tool: connectors, gateways, separate licensing and governance |
+| **Cost** | No additional BI license | Per-seat licensing |
+| **Tradeoff** | We own the code, testing, and maintenance | Vendor handles hosting, updates, and sharing |
+
+The deciding factors were **flexibility and speed of development** — the app needs custom interactions (grain switching, trend exploration, drill-downs) that are awkward to build in BI tools — and **easy integration with the Databricks environment**: the app runs where the data already lives and queries the gold layer directly.
+
+---
+
+## 8. Future Enhancements
+
+### Pipeline
+
+- **Glob pattern for pipeline libraries** — replace the explicit file list in `real_estate_pipeline_new` with the glob pattern (`src/pipelines/*.py`) so new pipeline files are picked up automatically instead of added manually (resolves Issue #6).
+- **Bronze column cleaning** — normalize column names to snake_case at bronze so downstream SQL no longer needs backtick-quoted names like `"MEDIAN SALE PRICE ($)"` (resolves Issue #5).
+
+### App features
+
+- **Neighborhood-level zoom** — drill from county → ZIP → neighborhood in the map views.
+- **Additional trends** — more time-series views: inventory, days on market, months of supply, sale-to-list ratios, across all three grains.
+- **Investment-area identification** — composite scoring of price trends, supply, and social-capital / ACS indicators to flag potential investment areas.
+
+### Data & enrichment
+
+- **Complete the geo dimensions** — build the planned `gold_dev.geo_re` dimension tables (dim_state, dim_county, dim_zipcode, dim_zcta) and ingest the Census ZCTA Gazetteer reference data.
+- **Crosswalk-based aggregation** — use the ingested HUD USPS ZIP crosswalk to roll up ZIP-level metrics to county where direct county data is missing.
+- **Historical snapshots** — keep periodic gold snapshots so the app can show real change-over-time rather than current-state only.
+
+### Operations
+
+- **Scheduled updates + alerting** — schedule pipeline updates and alert on failures or expectation drop-rate spikes (drop metrics are already recorded in the pipeline event log).
+- **Metric layer** — define canonical KPIs as Unity Catalog metric views so the app and any future BI consumers share the same formulas.
+- **Data freshness indicator** — surface `gold_refresh_timestamp` in the app so users know how current the data is.

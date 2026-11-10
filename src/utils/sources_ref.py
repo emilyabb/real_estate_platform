@@ -54,15 +54,34 @@ OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG = {
 
 
 # -------------------------------------------------------------------
-# OPPORTUNITY INSIGHTS
+# CENSUS BUREAU (ACS)
 # -------------------------------------------------------------------
+# Raw files for all three grains land in the same directory as
+# american_community_survey_{grain}_{timestamp}.json. Unlike HUD FMR (whose
+# bronze table is geography-neutral), each ACS grain gets its own bronze and
+# silver table because the raw JSON column layout differs per grain.
 CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG = {
-    "bronze_table_name": "american_community_survey_zcta",
-    # "schema_name": "census_bureau",
-    "natural_key": ["zip"],
-    "bronze_key": ["zip", "_ingest_timestamp"],
-    "silver_key": ["zip_code"],
-    "csv_directory":"/Volumes/bronze_dev/census_bureau/census_bureau_raw/american_community_survey"
+    "csv_directory": "/Volumes/bronze_dev/census_bureau/census_bureau_raw/american_community_survey",
+    "grains": {
+        "zcta": {
+            "bronze_table_name": "american_community_survey_zcta",
+            "natural_key": ["zip"],
+            "bronze_key": ["zip", "_ingest_timestamp"],
+            "silver_key": ["zcta_code"],  # silver renames zip -> zcta_code; key must match the output column
+        },
+        "county": {
+            "bronze_table_name": "american_community_survey_county",
+            "natural_key": ["state", "county"],
+            "bronze_key": ["state", "county", "_ingest_timestamp"],
+            "silver_key": ["state_fips", "county_fips"],  # silver renames state/county -> state_fips/county_fips
+        },
+        "state": {
+            "bronze_table_name": "american_community_survey_state",
+            "natural_key": ["state"],
+            "bronze_key": ["state", "_ingest_timestamp"],
+            "silver_key": ["state_fips"],  # silver renames state -> state_fips
+        },
+    },
 }
 
 
@@ -82,9 +101,14 @@ USPS_ZIP_CODES_CONFIG = {
 # HUD FAIR MARKET RENTS
 # -------------------------------------------------------------------
 HUD_FAIR_MARKET_RENTS_CONFIG = {
-    "bronze_table_name": "fair_market_rents_county",
+    "bronze_table_name": "fair_market_rents",  # geography-neutral: raw file contains county-, MSA-, and zip-level rows
     "natural_key": ["county_name", "zip_code", "year"],
-    "silver_key": ["county_name", "zip_code", "year"],
+    "silver_keys": {
+        # Per-level replace_using keys for the silver FMR tables
+        "county": ["county_name", "year"],
+        "msa": ["metro_name", "year"],
+        "zipcode": ["zip_code", "year"],
+    },
 }
 
 

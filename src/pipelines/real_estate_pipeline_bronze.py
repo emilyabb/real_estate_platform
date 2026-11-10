@@ -135,14 +135,14 @@ def bronze_hud_counties():
 
 
 @dlt.table(
-    name="bronze_dev.hud.fair_market_rents_county",
-    comment="Bronze layer: HUD Fair Market Rents by county and zip code",
+    name="bronze_dev.hud.fair_market_rents",
+    comment="Bronze layer: HUD Fair Market Rents (county, MSA, and ZIP levels)",
     table_properties={
         "quality": "bronze",
         "pipelines.autoOptimize.zOrderCols": "county_name,zip_code,year"
     }
 )
-def bronze_hud_fair_market_rents_county():
+def bronze_hud_fair_market_rents():
     """Load HUD Fair Market Rent data from volume."""
     return (
         spark.readStream
@@ -151,7 +151,7 @@ def bronze_hud_fair_market_rents_county():
         .option("cloudFiles.inferColumnTypes", "true")
         .option("multiLine", "true")
         .option("cloudFiles.schemaLocation", f"{SCHEMA_LOCATION_BASE}/hud_fmr")
-        .load("/Volumes/bronze_dev/hud/hud_raw/fair_market_rents_county/fmr_data_*.json")
+        .load("/Volumes/bronze_dev/hud/hud_raw/fair_market_rents/fmr_data_*.json")
         # Extract nested data structure
         .select(
             F.col("data.data").alias("fmr_data"),
@@ -194,51 +194,100 @@ def bronze_hud_fair_market_rents_county():
 # ==========================================================
 # CENSUS AMERICAN COMMUNITY SURVEY
 # ==========================================================
-cb_acs_bronze_key = ",".join(CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["bronze_key"])
-cb_acs_table_name = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["bronze_table_name"]
-@dlt.table(
-    name=f"bronze_dev.census_bureau.{cb_acs_table_name}",
-    # schema="census_bureau",
-    comment="Bronze layer: Raw American Community Survey ZCTA-level data from Census Bureau",
-    table_properties={
-        "quality": "bronze",
-        "pipelines.autoOptimize.zOrderCols": cb_acs_bronze_key
-    }
-)
-def bronze_census_bureau_american_community_survey():
+# Raw files for all three ACS grains land in the same directory; grains are
+# distinguishable by filename pattern. Unlike HUD FMR (one geography-neutral
+# bronze table), each ACS grain gets its own bronze table because the raw
+# JSON column layout differs per grain (the geography columns differ).
 
-    cb_acs_directory = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["csv_directory"]
-    table_name = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["bronze_table_name"]
-    return (
-        spark.readStream
-        .format("cloudFiles")
-        .option("cloudFiles.format", "text")
-        .option("wholeText", "true")
-        .option("cloudFiles.schemaLocation",  f"{SCHEMA_LOCATION_BASE}/{table_name}")
-        .load(cb_acs_directory) # All files in directory
-        # Parse the list-of-lists JSON: [[headers...], [row1...], [row2...], ...]
-        .withColumn("parsed", F.from_json(
-            "value",
-            ArrayType(ArrayType(StringType()))
-        ))
-        .withColumn("row", F.explode("parsed"))
-        # Skip the header row (first element of each file is column names)
-        .filter(F.element_at("row", 1) != "NAME")
-        .select(
-            F.element_at("row", 1).alias("NAME"),
-            F.element_at("row", 2).alias("B01003_001E"),
-            F.element_at("row", 3).alias("B01002_001E"),
-            F.element_at("row", 4).alias("B19013_001E"),
-            F.element_at("row", 5).alias("B17001_002E"),
-            F.element_at("row", 6).alias("B02001_002E"),
-            F.element_at("row", 7).alias("B02001_003E"),
-            F.element_at("row", 8).alias("B02001_005E"),
-            F.element_at("row", 9).alias("B03003_003E"),
-            F.element_at("row", 10).alias("zip"),
-            F.current_timestamp().alias("_ingest_timestamp"),
-            F.col("_metadata.file_path").alias("_source_file"),
-        )
+# Filename patterns per grain (matched against the full source file path).
+CB_ACS_GRAIN_FILE_PATTERNS = {
+    "county": r"american_community_survey_county_[0-9]{8}_[0-9]{6}\.json$",
+    "state": r"american_community_survey_state_[0-9]{8}_[0-9]{6}\.json$",
+    # ZCTA also includes legacy ZCTA-content files: american_community_survey_{ts}.json
+    # (no grain segment) and misnamed social_capital_zip_{ts}.json -- keep ingesting
+    # them or a future full refresh loses their data.
+    "zcta": r"(american_community_survey_(zcta_)?[0-9]{8}_[0-9]{6}|social_capital_zip_[0-9]{8}_[0-9]{6})\.json$",
+}
+
+# Geography columns at the end of the raw rows, after the 9 shared ACS
+# variables (raw JSON is a list-of-lists, first row the header):
+# NAME, B01003_001E, B01002_001E, B19013_001E, B17001_002E,
+# B02001_002E, B02001_003E, B02001_005E, B03003_003E, then grain geography.
+CB_ACS_GRAIN_GEOGRAPHY_COLUMNS = {
+    "zcta": [F.element_at("row", 10).alias("zip")],
+    "county": [
+        F.element_at("row", 10).alias("state"),
+        F.element_at("row", 11).alias("county"),
+    ],
+    "state": [F.element_at("row", 10).alias("state")],
+}
+
+
+def create_bronze_census_acs_table(grain):
+    """Create a bronze layer streaming table for one ACS geographic grain.
+
+    Reads only this grain's files from the shared raw directory (filtered by
+    filename pattern), then parses the list-of-lists JSON into one row per
+    record.
+    """
+    grain_config = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["grains"][grain]
+    table_name = grain_config["bronze_table_name"]
+    bronze_key = ",".join(grain_config["bronze_key"])
+
+    @dlt.table(
+        name=f"bronze_dev.census_bureau.{table_name}",
+        # schema="census_bureau",
+        comment=f"Bronze layer: Raw American Community Survey {grain}-level data from Census Bureau",
+        table_properties={
+            "quality": "bronze",
+            "pipelines.autoOptimize.zOrderCols": bronze_key
+        }
     )
+    def bronze_census_bureau_acs():
+
+        cb_acs_directory = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["csv_directory"]
+        return (
+            spark.readStream
+            .format("cloudFiles")
+            .option("cloudFiles.format", "text")
+            .option("wholeText", "true")
+            .option("cloudFiles.schemaLocation",  f"{SCHEMA_LOCATION_BASE}/{table_name}")
+            .load(cb_acs_directory) # All files in directory; filtered to this grain below
+            .withColumn("_source_file", F.col("_metadata.file_path"))
+            # Keep only this grain's files -- the directory is shared by all three
+            # grains, whose raw column layouts differ.
+            .filter(F.col("_source_file").rlike(CB_ACS_GRAIN_FILE_PATTERNS[grain]))
+            # Parse the list-of-lists JSON: [[headers...], [row1...], [row2...], ...]
+            .withColumn("parsed", F.from_json(
+                "value",
+                ArrayType(ArrayType(StringType()))
+            ))
+            .withColumn("row", F.explode("parsed"))
+            # Skip the header row (first element of each file is column names)
+            .filter(F.element_at("row", 1) != "NAME")
+            .select(
+                F.element_at("row", 1).alias("NAME"),
+                F.element_at("row", 2).alias("B01003_001E"),
+                F.element_at("row", 3).alias("B01002_001E"),
+                F.element_at("row", 4).alias("B19013_001E"),
+                F.element_at("row", 5).alias("B17001_002E"),
+                F.element_at("row", 6).alias("B02001_002E"),
+                F.element_at("row", 7).alias("B02001_003E"),
+                F.element_at("row", 8).alias("B02001_005E"),
+                F.element_at("row", 9).alias("B03003_003E"),
+                # Grain-specific geography columns (zip / state / state+county)
+                *CB_ACS_GRAIN_GEOGRAPHY_COLUMNS[grain],
+                F.current_timestamp().alias("_ingest_timestamp"),
+                F.col("_metadata.file_path").alias("_source_file"),
+            )
+        )
+
+    return bronze_census_bureau_acs
+
+
+# Create bronze tables for all three ACS grains
+for cb_acs_grain in CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["grains"]:
+    create_bronze_census_acs_table(cb_acs_grain)
 
 
 # ==========================================================
