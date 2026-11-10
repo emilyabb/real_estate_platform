@@ -18,7 +18,7 @@ from pyspark.sql import DataFrame
 # This avoids the complexity of joining multiple streaming sources while
 # providing a consistent snapshot for analytics and dashboards.
 #
-# See docs/GOLD_PLAN.md for the full gold layer design.
+# See _temp_utilities/GOLD_PLAN.md for the full gold layer design.
 
 # Metadata columns to drop from silver tables (not needed in gold)
 METADATA_COLS = ["_rescued_data", "_ingest_timestamp", "_source_file", "_processed_timestamp"]
