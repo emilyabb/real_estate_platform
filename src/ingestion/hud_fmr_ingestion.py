@@ -12,7 +12,7 @@
 # MAGIC %md
 # MAGIC # HUD Fair Market Rent (FMR) Ingestion
 # MAGIC
-# MAGIC **Purpose:** Recurring ingestion of Fair Market Rent data for all counties
+# MAGIC **Purpose:** Recurring ingestion of Fair Market Rent data (responses contain county-, MSA-, and ZIP-code-level rows)
 # MAGIC
 # MAGIC **Run Frequency:** Daily, weekly, or monthly (based on HUD data update schedule)
 # MAGIC
@@ -20,7 +20,7 @@
 # MAGIC * `/Volumes/bronze_dev/hud/hud_raw/reference_data/counties_reference_*.json` (reads latest file for county list)
 # MAGIC
 # MAGIC **Output Files:**
-# MAGIC * `/Volumes/bronze_dev/hud/hud_raw/fair_market_rents_county/fmr_data_YYYYMMDD_HHMMSS.json`
+# MAGIC * `/Volumes/bronze_dev/hud/hud_raw/fair_market_rents/fmr_data_YYYYMMDD_HHMMSS.json`
 # MAGIC
 # MAGIC **Note:** This directory is monitored by DLT for streaming ingestion into bronze/silver layers
 
@@ -94,7 +94,7 @@ print(f"Total counties to fetch: {len(county_detail_urls)}")
 # DBTITLE 1,Fetch FMR data from HUD API
 # Retrieve detailed FMR data for each county with rate limiting
 county_details = fetch_all(
-    urls=county_detail_urls[:10],
+    urls=county_detail_urls[:100],
     token=token,
     request_fn=hud_common.retrieve_hud_json
 )
@@ -114,6 +114,6 @@ filename = hud_common.generate_timestamped_filename("fmr_data")
 volume_path = hud_common.save_to_volume(
     county_details, 
     filename, 
-    volume_path="/Volumes/bronze_dev/hud/hud_raw/fair_market_rents_county"
+    volume_path="/Volumes/bronze_dev/hud/hud_raw/fair_market_rents"
 )
 print(f"Saved FMR data to: {volume_path}")

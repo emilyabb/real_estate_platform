@@ -1,2 +1,5 @@
 
 .databricks
+
+# Local scratch utilities (view_tables, gold planning) — not for review
+_temp_utilities/

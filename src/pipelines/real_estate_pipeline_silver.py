@@ -4,7 +4,12 @@ from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, IntegerType, DateType
 from pyspark.sql import DataFrame
 
-from src.utils.sources_ref import REDFIN_TABLES
+from src.utils.sources_ref import (
+    REDFIN_TABLES,
+    OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG,
+    CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG,
+    HUD_FAIR_MARKET_RENTS_CONFIG,
+)
 from src.utils.helpers import clean_columns_silver
 
 # ============================================================================
@@ -53,6 +58,7 @@ def cast_redfin_columns(df: DataFrame) -> DataFrame:
     """
     # Define columns that should remain as strings
     keep_as_string = ["region_id", "region_name", "region_type", "metro", "frequency"]
+    
     # Metadata columns to keep untouched
     metadata_cols = ["_ingest_timestamp", "_rescued_data", "_source_file"]
     
@@ -93,9 +99,9 @@ def create_silver_redfin_table(t):
     """
     table_name = t["table_name"]
     natural_key = t["natural_key"]
+    natural_key_silver = t["natural_key_silver"]
     
 
-    #TODO -- determine natural/primary key for each individual redfin table
     @dp.table(
         name=f"silver_dev.redfin.{table_name}",
         replace_using=natural_key_silver,
@@ -109,6 +115,7 @@ def create_silver_redfin_table(t):
     )
     @dp.expect_or_drop("valid_period", "period_end >= period_begin")
     @dp.expect_or_drop("has_last_updated", "last_updated IS NOT NULL")
+    @dp.expect_or_drop("has_region_name", "region_name IS NOT NULL")
     def load():
 
         df = spark.readStream.table(f"bronze_dev.redfin.{table_name}")        
@@ -123,17 +130,12 @@ def create_silver_redfin_table(t):
         
         # Cast columns to appropriate types (Redfin-specific logic)
         df = cast_redfin_columns(df)
-        
-        # Deduplicate: Use natural_key + LAST_UPDATED
-        # Keep the most recent record per natural key
-        natural_key_cols = [col.replace(" ", "_").lower() for col in natural_key]
-        # window_spec = Window.partitionBy(*natural_key_cols).orderBy(F.col("last_updated").desc())
-        # df = df.withColumn("_row_num", F.row_number().over(window_spec))
-        # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
 
-        df = df.withColumn("primary_key", F.concat(*natural_key_cols))
-        # df = df.dropDuplicates(F.col("primary_key"), F.col("last_updated"))  
-
+        # For ZIP-code grain tables, cast region_name to string and left-pad to 5 digits.
+        # Bronze stores REGION NAME as INT (e.g. 2557), but ZIP codes need leading
+        # zeros preserved (e.g. "02557") for correct joins and lookups.
+        if t.get("redfin_grain") == "zips":
+            df = df.withColumn("region_name", F.lpad(F.col("region_name").cast("string"), 5, "0"))
 
         # Add processing timestamp
         df = df.withColumn("_processed_timestamp", F.current_timestamp())
@@ -150,10 +152,10 @@ for t in REDFIN_TABLES:
 # ==========================================================
 # OPPORTUNITY INSIGHTS SILVER
 # ==========================================================
-
+opp_insights_silver_key = OPPORTUNITY_INSIGHTS_SOCIAL_CAPITAL_CONFIG["silver_key"]
 @dp.table(
     name="silver_dev.opportunity_insights.social_capital_zip",
-    replace_using=["zip_code"],
+    replace_using=opp_insights_silver_key,
     sequence_by="_ingest_timestamp",
     comment="Silver layer: Cleaned and standardized social capital by zipcode data from Opportunity Insights",
     table_properties={
@@ -162,6 +164,8 @@ for t in REDFIN_TABLES:
         "pipelines.autoOptimize.zOrderCols": "zip_code"
     }
 )
+@dp.expect_or_drop("has_zip_code", "zip_code IS NOT NULL")
+@dp.expect_or_drop("has_county_fips", "county_fips_code IS NOT NULL")
 def social_capital_zip():
     """Silver transformation for Opportunity Insights social capital data.
     
@@ -205,13 +209,6 @@ def social_capital_zip():
         F.col("_source_file")
     )
     
-    # Deduplicate by zip_code, keeping the most recent record by _ingest_timestamp
-    # Use _source_file as a stable tie-breaker for deterministic ordering
-    # window_spec = Window.partitionBy("zip_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
-    # df = df.withColumn("_row_num", F.row_number().over(window_spec))
-    # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-    df = df.dropDuplicates(F.col("zip_code"), F.col("_ingest_timestamp"))
-    # Add processing timestamp
     df = df.withColumn("_processed_timestamp", F.current_timestamp())
     
     return df
@@ -220,9 +217,14 @@ def social_capital_zip():
 # ==========================================================
 # CENSUS BUREAU SILVER
 # ==========================================================
-
+acs_silver_key = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["grains"]["zcta"]["silver_key"]
 @dp.table(
     name="silver_dev.census_bureau.american_community_survey_zcta",
+    replace_using=acs_silver_key,
+    # Sequence on ingest time + source file: two fetches ingested in the same
+    # update share an ingest timestamp (current_timestamp is fixed per batch),
+    # so the source file breaks the tie and the latest fetch wins per key.
+    sequence_by=F.concat_ws("|", F.col("_ingest_timestamp"), F.col("_source_file")),
     comment="Silver layer: Cleaned and standardized American Community Survey ZCTA-level data from Census Bureau",
     table_properties={
         "quality": "silver",
@@ -230,6 +232,7 @@ def social_capital_zip():
         "pipelines.autoOptimize.zOrderCols": "zcta_code"
     }
 )
+@dp.expect_or_drop("has_zcta_code", "zcta_code IS NOT NULL")
 def american_community_survey_zcta():
     """Silver transformation for Census Bureau ACS ZCTA data.
     
@@ -237,12 +240,12 @@ def american_community_survey_zcta():
     - Rename Census variable codes to descriptive names
     - Cast zip and NAME to string (ZCTA codes should be strings to preserve leading zeros)
     - Cast demographic variables to int or double as specified
-    - Deduplicate by zcta_code
+    - Deduplicate by zcta_code using replace_using, with _ingest_timestamp + _source_file
+      as sequence (the file breaks ingest-time ties between fetches)
     - Add processing timestamp
     """
     df = spark.readStream.table("bronze_dev.census_bureau.american_community_survey_zcta")
     
-    # Rename and cast columns in the order specified
     df = df.select(
         F.col("NAME").cast("string").alias("zcta_name"),
         F.col("zip").cast("string").alias("zcta_code"),
@@ -258,26 +261,269 @@ def american_community_survey_zcta():
         F.col("_ingest_timestamp"),
         F.col("_source_file")
     )
-    
-    # Deduplicate by zcta_code, keeping the most recent record by _ingest_timestamp
-    # Use _source_file as a stable tie-breaker for deterministic ordering
-    # window_spec = Window.partitionBy("zcta_code").orderBy(F.col("_ingest_timestamp").desc(), F.col("_source_file"))
-    # df = df.withColumn("_row_num", F.row_number().over(window_spec))
-    # df = df.filter(F.col("_row_num") == 1).drop("_row_num")
-    
-    # Add processing timestamp
+
+    # Distinct from ingestion time: records when this transformation ran.
     df = df.withColumn("_processed_timestamp", F.current_timestamp())
     
     return df
 
 
 # ==========================================================
-# HUD REFERENCE - SILVER (if needed)
+# CENSUS BUREAU SILVER - COUNTY & STATE GRAINS
 # ==========================================================
+# Same pattern as the ZCTA silver table above, but the geography columns
+# differ per grain: county rows carry state + county FIPS, state rows carry
+# state FIPS only. All FIPS codes are kept as strings to preserve leading
+# zeros.
 
-# NOTE: States and counties may not need silver versions
-# They're already clean reference data from the API
-# Consider silver only if you need:
-# - Additional enrichment
-# - Derived fields
-# - Quality checks beyond bronze
+ACS_SILVER_GRAINS = {
+    "county": {
+        "name_column": "county_name",
+        "geography_columns": [
+            F.col("state").cast("string").alias("state_fips"),
+            F.col("county").cast("string").alias("county_fips"),
+        ],
+        "expectations": {
+            "has_state_fips": "state_fips IS NOT NULL",
+            "has_county_fips": "county_fips IS NOT NULL",
+        },
+        "zorder_cols": "state_fips,county_fips",
+    },
+    "state": {
+        "name_column": "state_name",
+        "geography_columns": [
+            F.col("state").cast("string").alias("state_fips"),
+        ],
+        "expectations": {
+            "has_state_fips": "state_fips IS NOT NULL",
+        },
+        "zorder_cols": "state_fips",
+    },
+}
+
+
+def create_silver_census_acs_table(grain):
+    """Create a silver layer table for one geographic grain of Census ACS data.
+
+    Args:
+        grain: One of 'county', 'state' (keys of the config's grains dict)
+    """
+    grain_config = CENSUS_BUREAU_AMERICAN_COMMUNITY_SURVEY_CONFIG["grains"][grain]
+    table_name = grain_config["bronze_table_name"]
+    silver_key = grain_config["silver_key"]
+    grain_spec = ACS_SILVER_GRAINS[grain]
+
+    @dp.table(
+        name=f"silver_dev.census_bureau.{table_name}",
+        replace_using=silver_key,
+        # Sequence on ingest time + source file: two fetches ingested in the
+        # same update share an ingest timestamp (current_timestamp is fixed
+        # per batch), so the source file breaks the tie and the latest fetch
+        # wins per key.
+        sequence_by=F.concat_ws("|", F.col("_ingest_timestamp"), F.col("_source_file")),
+        comment=f"Silver layer: Cleaned and standardized American Community Survey {grain}-level data from Census Bureau",
+        table_properties={
+            "quality": "silver",
+            "delta.columnMapping.mode": "name",
+            "pipelines.autoOptimize.zOrderCols": grain_spec["zorder_cols"]
+        }
+    )
+    @dp.expect_all_or_drop(dict(grain_spec["expectations"]))
+    def load():
+        """Silver transformation for Census Bureau ACS data.
+
+        Transformations:
+        - Rename Census variable codes to descriptive names
+        - Cast FIPS codes and NAME to string (FIPS codes should be strings to preserve leading zeros)
+        - Cast demographic variables to int or double as specified
+        - Deduplicate by this grain's replace_using key, with _ingest_timestamp +
+          _source_file as sequence (the file breaks ingest-time ties between fetches)
+        - Add processing timestamp
+        """
+        df = spark.readStream.table(f"bronze_dev.census_bureau.{table_name}")
+
+        df = df.select(
+            F.col("NAME").cast("string").alias(grain_spec["name_column"]),
+            # Grain geography columns: state+county FIPS (county), state FIPS (state)
+            *grain_spec["geography_columns"],
+            F.col("B01003_001E").cast("int").alias("total_population"),
+            F.col("B01002_001E").cast("double").alias("median_age"),
+            F.col("B19013_001E").cast("int").alias("median_household_income"),
+            F.col("B17001_002E").cast("int").alias("population_below_poverty_level"),
+            F.col("B02001_002E").cast("int").alias("white_alone_population"),
+            F.col("B02001_003E").cast("int").alias("black_or_african_american_alone_population"),
+            F.col("B02001_005E").cast("int").alias("asian_alone_population"),
+            F.col("B03003_003E").cast("int").alias("hispanic_or_latino_population"),
+            # Metadata columns
+            F.col("_ingest_timestamp"),
+            F.col("_source_file")
+        )
+
+        # Distinct from ingestion time: records when this transformation ran.
+        df = df.withColumn("_processed_timestamp", F.current_timestamp())
+
+        return df
+
+    return load
+
+
+# Create silver tables for the county and state grains (ZCTA is defined above)
+for acs_silver_grain in ACS_SILVER_GRAINS:
+    create_silver_census_acs_table(acs_silver_grain)
+
+
+# ==========================================================
+# HUD FAIR MARKET RENTS - SILVER
+# ==========================================================
+# Bronze fair_market_rents contains rows at three geographic levels.
+# metro_status is the reliable discriminator: '1.0' means the county's FMR
+# area is a metro/MSA area; '0' means the FMR area is the county itself.
+#   - County rows: zip_code IS NULL AND metro_status = 0
+#   - MSA rows:    zip_code = 'MSA level', OR zip_code IS NULL with
+#                  metro_status = 1 (metro counties — area_name is the MSA)
+#   - ZIP rows:    COALESCE(zip_code, '') NOT IN ('', 'MSA level')
+# Each level gets its own silver table with a level-appropriate
+# replace_using key and expectations.
+
+HUD_FMR_SILVER_LEVELS = [
+    {
+        "suffix": "county",
+        "key": HUD_FAIR_MARKET_RENTS_CONFIG["silver_keys"]["county"],
+        "zorder_cols": "county_name,year",
+        "level_filter": "COALESCE(zip_code, '') = '' AND COALESCE(TRY_CAST(metro_status AS DOUBLE), 0) = 0",
+        "expectations": {"has_county_name": "county_name IS NOT NULL"},
+        "comment": "Silver layer: Cleaned HUD Fair Market Rents, county-level rows",
+    },
+    {
+        "suffix": "msa",
+        "key": HUD_FAIR_MARKET_RENTS_CONFIG["silver_keys"]["msa"],
+        "zorder_cols": "metro_name,year",
+        "level_filter": "COALESCE(zip_code, '') = 'MSA level' OR (COALESCE(zip_code, '') = '' AND COALESCE(TRY_CAST(metro_status AS DOUBLE), 0) = 1)",
+        "expectations": {"has_metro_name": "metro_name IS NOT NULL"},
+        "comment": "Silver layer: Cleaned HUD Fair Market Rents, MSA-level rows",
+    },
+    {
+        "suffix": "zipcode",
+        "key": HUD_FAIR_MARKET_RENTS_CONFIG["silver_keys"]["zipcode"],
+        "zorder_cols": "zip_code,year",
+        "level_filter": "COALESCE(zip_code, '') NOT IN ('', 'MSA level')",
+        "expectations": {
+            "has_zip_code": "zip_code IS NOT NULL",
+            "has_year": "year IS NOT NULL",
+        },
+        "comment": "Silver layer: Cleaned HUD Fair Market Rents, ZIP-code-level rows",
+    },
+]
+
+
+def create_silver_hud_fmr_table(t):
+    """Create a silver layer table for one geographic level of HUD Fair Market Rents.
+
+    Args:
+        t: Dictionary with 'suffix', 'key', 'zorder_cols', 'level_filter',
+           'expectations', and 'comment' fields
+    """
+    @dp.table(
+        name=f"silver_dev.hud.fair_market_rents_{t['suffix']}",
+        replace_using=t["key"],
+        sequence_by="_ingest_timestamp",
+        comment=t["comment"],
+        table_properties={
+            "quality": "silver",
+            "delta.columnMapping.mode": "name",
+            "pipelines.autoOptimize.zOrderCols": t["zorder_cols"]
+        }
+    )
+    @dp.expect_all_or_drop(dict(t["expectations"]))
+    def load():
+        """Silver transformation for one level of HUD Fair Market Rents data.
+
+        Transformations:
+        - Keep only rows belonging to this geographic level
+        - Cast year from string to int
+        - Keep rent columns (efficiency, one_bedroom, etc.) as int
+        - Keep text columns (county_name, metro_name, area_name, etc.) as string
+        - Deduplicate by this level's replace_using key
+        - Add processing timestamp
+        """
+        df = spark.readStream.table("bronze_dev.hud.fair_market_rents")
+
+        # Keep only the rows for this geographic level
+        df = df.filter(F.expr(t["level_filter"]))
+
+        df = df.select(
+            F.col("county_name"),
+            F.col("metro_name"),
+            F.col("area_name"),
+            F.col("metro_status"),
+            F.col("smallarea_status"),
+            F.col("year").cast("int").alias("year"),
+            F.col("zip_code"),
+            F.col("efficiency"),
+            F.col("one_bedroom"),
+            F.col("two_bedroom"),
+            F.col("three_bedroom"),
+            F.col("four_bedroom"),
+            F.col("source_url"),
+            # Metadata columns
+            F.col("_ingest_timestamp"),
+            F.col("_source_file")
+        )
+
+        df = df.withColumn("_processed_timestamp", F.current_timestamp())
+
+        return df
+
+    return load
+
+# Create one silver table per geographic level
+for hud_fmr_level in HUD_FMR_SILVER_LEVELS:
+    create_silver_hud_fmr_table(hud_fmr_level)
+
+
+# ==========================================================
+# HUD DIMENSION TABLES (States & Counties) - Batch reads
+# ==========================================================
+# These are static reference tables — batch read from bronze,
+# not streamed. They serve as dimension lookups for other silver tables.
+
+@dp.table(
+    name="silver_dev.hud.dim_states",
+    comment="Silver layer: Dimension table for HUD states reference data",
+    table_properties={
+        "quality": "silver",
+        "delta.columnMapping.mode": "name",
+        "pipelines.autoOptimize.zOrderCols": "state_code"
+    }
+)
+def dim_states():
+    """Silver dimension table for states.
+    
+    Batch read from bronze since this is static reference data
+    that rarely changes (updated only when HUD publishes new reference files).
+    """
+    df = spark.read.table("bronze_dev.hud.states")
+    df = clean_columns_silver(df)
+    df = df.withColumn("_processed_timestamp", F.current_timestamp())
+    return df
+
+
+@dp.table(
+    name="silver_dev.hud.dim_counties",
+    comment="Silver layer: Dimension table for HUD counties reference data",
+    table_properties={
+        "quality": "silver",
+        "delta.columnMapping.mode": "name",
+        "pipelines.autoOptimize.zOrderCols": "fips_code,state_code"
+    }
+)
+def dim_counties():
+    """Silver dimension table for counties.
+    
+    Batch read from bronze since this is static reference data
+    that rarely changes (updated only when HUD publishes new reference files).
+    """
+    df = spark.read.table("bronze_dev.hud.counties")
+    df = clean_columns_silver(df)
+    df = df.withColumn("_processed_timestamp", F.current_timestamp())
+    return df

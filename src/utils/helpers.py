@@ -164,7 +164,7 @@ def clean_columns_silver(df):
         col_name = col_name.lower()
         col_name = re.sub(r"[^\w]", "_", col_name)   # replace non-alphanumeric with _
         col_name = re.sub(r"_+", "_", col_name)      # collapse multiple _
-        col_name = col_name.strip("_")              # trim
+        col_name = col_name.rstrip("_")             # trim trailing only (preserve leading _ for metadata cols)
         
         return col_name
 

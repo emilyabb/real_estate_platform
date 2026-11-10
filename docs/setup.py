@@ -9,11 +9,11 @@ print("✓ Created catalog: BRONZE_DEV")
 
 
 # # Create subdirectory for each table
-# for table in REDFIN_TABLES:
-#     table_name = table["table_name"]
-#     path = f"{REDFIN_VOLUME_BASE}/{table_name}"
-#     dbutils.fs.mkdirs(path)
-#     print(f"Created: {path}")
+for table in REDFIN_TABLES:
+    table_name = table["table_name"]
+    path = f"{REDFIN_VOLUME_BASE}/{table_name}"
+    dbutils.fs.mkdirs(path)
+    print(f"Created: {path}")
 
 
 spark.sql("USE CATALOG bronze_dev")
